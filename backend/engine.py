@@ -565,8 +565,10 @@ class TradingEngine:
                                f"ATR {sig['atr']:.6g}" + (f" · SL {k[0]:g}×ATR · TP {k[1]:g}×ATR" if k else "") + f" · entrada {entry:.6g} · SL {sl:.6g} · TP {tp:.6g}")
 
     async def open_position(self, symbol: str, sig: dict, settings: Settings, signal_id: str, risk_factor: float = 1.0, risk_reason: str = "noticias",
-                            horizon: str = "short", entry_type: str = "market", fill: dict = None, exit_mode: str = None, manage: dict = None):
-        """`fill` = an already executed maker order ({entry, qty, fee, order_id, link_id} in REAL; {entry} in PAPER): no new order is sent.
+                            horizon: str = "short", entry_type: str = "market", fill: dict = None, exit_mode: str = None, manage: dict = None,
+                            pair_limit: bool = True):
+        """`pair_limit=False` (manual orders): a pair that already has a position can be opened again.
+        `fill` = an already executed maker order ({entry, qty, fee, order_id, link_id} in REAL; {entry} in PAPER): no new order is sent.
         `exit_mode="cross"` (Test cruce EMA): the SL/TP are virtual (sizing only), nothing is sent to Bybit and the position doesn't use a slot."""
         risk_factor = 1.0  # fixed-fractional risk: no filter may shrink the size
         risk_pct = settings.risk_per_trade
@@ -575,7 +577,7 @@ class TradingEngine:
             open_docs = await self._open_and_pending(exclude_symbol=symbol)
             slot = None if cross else self._slot_block(open_docs, settings, horizon)
             # a REAL maker fill is already a live position: it must be recorded even if the cap was reached meanwhile
-            if symbol in [p["symbol"] for p in open_docs if not p.get("pending")] or (slot and not (fill and self.live)):
+            if (pair_limit and symbol in [p["symbol"] for p in open_docs if not p.get("pending")]) or (slot and not (fill and self.live)):
                 await self.log("RISK", f"{symbol}: apertura cancelada · {slot or 'par ya abierto'}")
                 self._open_fail = slot or "par ya abierto"
                 return None

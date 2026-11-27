@@ -789,3 +789,8 @@
 - Ajustes Bybit/HotForex: «Seguimientos tras el cierre (1h)» y «Cada cuántos minutos» (ocultos en Pepperstone y Labs).
 - Posiciones (tabla, columna «Herram.» a la izquierda): botón de gráfico completo (`PositionChartDialog`, pantalla completa) y botón IA (`PositionAiButton`) con confirmación: «Solo opinión» o «Que la IA actúe». `POST {prefix}/positions/{id}/ai-analyze {act}` → `position_review.analyze_one`: MANTENER / BREAKEVEN / CERRAR / AJUSTAR (nuevo SL/TP validado por lado del precio; en REAL vía bróker: Bybit `set_stop(sl, tp)`, HFM `set_stop(sym, id, sl, tp)`).
 - Tested iteration_107: backend 31/31 (incl. scan de seguimiento simulado), frontend OK en Bybit/HotForex/Pepperstone. Menores corregidos tras el informe (pending_entries en pares a omitir, ATR NaN, breakeven en posiciones de cruce).
+
+## Implemented (2026-11 · órdenes manuales sin límite de par)
+- `open_position(pair_limit=False)` (Bybit y FX) desde `POST /manual-order`: se puede abrir otra operación manual en un par que ya tiene posición (Bybit, HotForex, Pepperstone). Se mantienen el máximo de posiciones y la pérdida diaria. Las señales del bot siguen con una posición por par.
+- Excepción: Bybit en REAL (modo one-way agrupa todo en una posición por par) → 400 con explicación.
+- Tested: tests/test_manual_manage.py 9/9 (dos manuales en el mismo par en los 3 bots).

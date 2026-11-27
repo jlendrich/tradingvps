@@ -90,7 +90,7 @@ def add_shared_routes(router, engine, label: str, currency="USDT", before_unit: 
 
     @router.post("/manual-order")
     async def manual_order(body: ManualOrder):
-        """Manual market order from the chart: SL/TP chosen by the user, size by fixed-fractional risk. Bypasses AI, rules and filters; risk limits still apply."""
+        """Manual market order from the chart: SL/TP chosen by the user, size by fixed-fractional risk. Bypasses AI, rules, filters and the one-position-per-pair limit; slots and daily loss still apply."""
         settings = await engine.get_settings()
         price = (engine.market.tickers.get(body.symbol) or {}).get("price")
         if not price:
@@ -112,11 +112,13 @@ def add_shared_routes(router, engine, label: str, currency="USDT", before_unit: 
             raise HTTPException(400, f"Niveles inválidos para el precio actual ({price:.6g}): el SL debe quedar {'por debajo' if d > 0 else 'por encima'} y el TP al otro lado")
         if (await engine.account_summary())["daily_paused"]:
             raise HTTPException(400, "Límite de pérdida diaria alcanzado")
+        if not getattr(engine, "profile", None) and engine.live and await engine.db.positions.count_documents({"symbol": body.symbol}):
+            raise HTTPException(400, "En REAL, Bybit agrupa todas las órdenes de un par en una sola posición: no se puede abrir otra operación en un par que ya tiene una abierta")
         sig = {"side": body.side, "strategy": "manual", "price": price, "sl": body.sl, "tp": body.tp, "atr": body.atr, "score": 0,
                "reasons": ["Operación manual desde el gráfico"], "indicators": {"atr": body.atr}, "key_ts": int(time.time() * 1000), "tp_mode": "fixed"}
         await engine.log("ORDER", f"{body.symbol}: orden MANUAL {body.side.upper()} · riesgo {body.risk_pct:g}% · SL {body.sl:.6g} · " + ("sin TP, salida en el cruce contrario de EMAs" if cross else f"TP {body.tp:.6g}"))
         engine._open_fail = None
-        extra = {**({"exit_mode": "cross"} if cross else {}), **({"manage": body.manage.model_dump()} if body.manage else {})}
+        extra = {"pair_limit": False, **({"exit_mode": "cross"} if cross else {}), **({"manage": body.manage.model_dump()} if body.manage else {})}
         res = await engine.open_position(body.symbol, sig, settings.model_copy(update={"risk_per_trade": body.risk_pct}), None, **extra)
         pos, reason = res if isinstance(res, tuple) else (res, getattr(engine, "_open_fail", None))
         if not pos:

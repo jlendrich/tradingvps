@@ -32,7 +32,7 @@ def _last(h, prefix, symbol):
 
 def _open(h, prefix, symbol, manage, tp=True):
     price, atr = _last(h, prefix, symbol)
-    body = {"symbol": symbol, "side": "long", "sl": price - 3 * atr, "atr": atr, "risk_pct": 1, "manage": manage}
+    body = {"symbol": symbol, "side": "long", "sl": price - 3 * atr, "atr": atr, "risk_pct": 1, **({"manage": manage} if manage else {})}
     if tp:
         body["tp"] = price + 6 * atr
     return requests.post(f"{API}{prefix}/manual-order", json=body, headers=h)
@@ -80,3 +80,21 @@ def test_manual_order_persists_manage(h, prefix, symbol, manage, tp):
         assert any(x.get("id") == pos["id"] and x.get("manage") == manage for x in rows)
     finally:
         _close(h, prefix, pos["id"])
+
+
+@pytest.mark.parametrize("prefix,symbol,tp", [("/api", "BTCUSDT", True), ("/api/fx", "EURUSD", True), ("/api/pepper", "EURUSD", False)])
+def test_manual_orders_ignore_pair_limit(h, prefix, symbol, tp):
+    first = _open(h, prefix, symbol, None, tp)
+    if first.status_code == 400 and "Mercado cerrado" in first.text:
+        pytest.skip("market closed")
+    assert first.status_code == 200, first.text
+    ids = [first.json()["id"]]
+    try:
+        second = _open(h, prefix, symbol, None, tp)
+        assert second.status_code == 200, second.text
+        ids.append(second.json()["id"])
+        listed = requests.get(f"{API}{prefix}/positions", headers=h).json()
+        assert sum(1 for x in listed if x["symbol"] == symbol and x["id"] in ids) == 2
+    finally:
+        for i in ids:
+            _close(h, prefix, i)

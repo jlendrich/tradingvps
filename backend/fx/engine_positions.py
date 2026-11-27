@@ -376,8 +376,10 @@ class PositionsMixin:
                                f"ATR {f(sig['atr'])}" + (f" · SL {k[0]:g}×ATR · TP {k[1]:g}×ATR" if k else "") + f" · entrada {f(entry)} · SL {f(sl)} · TP {f(tp)}")
 
     async def open_position(self, symbol: str, sig: dict, settings: FxSettings, signal_id: str, risk_factor: float = 1.0,
-                            risk_reason: str = "noticias", expires_at: str = None, horizon: str = "short", exit_mode: str = None, manage: dict = None):
-        """Returns (Position | None, reason) — reason explains why nothing was opened.
+                            risk_reason: str = "noticias", expires_at: str = None, horizon: str = "short", exit_mode: str = None, manage: dict = None,
+                            pair_limit: bool = True):
+        """`pair_limit=False` (manual orders): a pair that already has a position can be opened again.
+        Returns (Position | None, reason) — reason explains why nothing was opened.
         `exit_mode="cross"` (Test cruce EMA): only the 3×ATR safety SL is sent (no TP), the position uses no slot and closes on the opposite cross."""
         risk_factor = 1.0  # fixed-fractional risk: no filter may change the size
         risk_pct = settings.risk_per_trade
@@ -386,7 +388,7 @@ class PositionsMixin:
         async with self.lock:
             open_docs = await self.db.positions.find({}, {"symbol": 1, "side": 1, "horizon": 1, "exit_mode": 1}).to_list(100)
             slot = None if cross else self._slot_block(open_docs, settings, horizon)
-            if self._pair_taken(open_docs, symbol, cross) or slot:
+            if (pair_limit and self._pair_taken(open_docs, symbol, cross)) or slot:
                 await self.log("RISK", f"{symbol}: apertura cancelada · {slot or 'par ya abierto'}")
                 return None, slot or "par ya abierto"
             price = tickers.get(symbol, {}).get("price") or sig["price"]
