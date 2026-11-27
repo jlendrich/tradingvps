@@ -120,6 +120,16 @@ export default function FxDashboard({ onLogout, bot = "fx" }) {
             Yahoo Finance sin respuesta: {data.status.exchange_error} · mostrando los últimos datos locales
           </div>
         )}
+        {data.status.mode === "REAL" && (data.status.data_feed?.blocked?.length > 0 || data.status.data_feed?.no_quote?.length > 0) && (
+          <div data-testid="fx-data-feed-banner" className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-2 font-mono text-[11px] text-amber-200">
+            {data.status.data_feed.blocked?.length > 0 && (
+              <>Sin velas de {brand.broker} para {data.status.data_feed.blocked.map((x) => x.symbol).join(", ")} ({data.status.data_feed.blocked[0].error}) · sin entradas nuevas en esos pares hasta que el puente las entregue. </>
+            )}
+            {data.status.data_feed.no_quote?.length > 0 && (
+              <>Sin cotización reciente de {brand.broker}: {data.status.data_feed.no_quote.map((x) => x.symbol).join(", ")} · no se opera con precios de otra fuente.</>
+            )}
+          </div>
+        )}
         {(data.status.broker_error || data.status.broker_health?.ok === false) && (
           <div data-testid="fx-broker-error-banner" className="rounded-md border border-rose-500/40 bg-rose-500/10 px-4 py-2 font-mono text-[11px] text-rose-200">
             {data.status.broker_health?.down_since
@@ -184,7 +194,7 @@ export default function FxDashboard({ onLogout, bot = "fx" }) {
           <Terminal logs={data.logs} onClear={() => act(() => http.delete("/logs"))} />
         </div>
         <p className="pb-4 pt-2 font-mono text-[10px] uppercase tracking-wider text-slate-600">
-          Simulación con precios reales de Yahoo Finance · Lotes y pips según especificaciones de {brand.broker}{data.status.costs?.commission_lot_usd ? ` · comisión ${data.status.costs.commission_lot_usd} USD/lote` : ""} · No es asesoría financiera · El apalancamiento implica alto riesgo
+          {data.status.mode === "REAL" ? `Modo REAL · velas, precios y spread de tu cuenta ${brand.broker} vía puente MetaTrader` : data.status.data_feed?.signals === "broker" ? `Simulación con velas y precios de tu cuenta ${brand.broker} (puente MT)` : "Simulación con precios reales de Yahoo Finance"} · Lotes y pips según especificaciones de {brand.broker}{data.status.costs?.commission_lot_usd ? ` · comisión ${data.status.costs.commission_lot_usd} USD/lote` : ""} · No es asesoría financiera · El apalancamiento implica alto riesgo
         </p>
       </main>
       )}

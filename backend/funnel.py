@@ -496,6 +496,17 @@ def _upcoming(kind: str, symbol: str, hours: int = 4) -> list:
             if now < datetime.fromisoformat(e["time"]) <= now + timedelta(hours=hours) and trade_guard.affects(kind, symbol, e["country"])][:3]
 
 
+def _price(engine, symbol: str, fallback: float) -> float:
+    """Current price of a pair: the engine's own feed when it has one (FX: broker quote in REAL), else the market tickers."""
+    f = getattr(engine, "funnel_price", None)
+    return f(symbol, fallback) if f else (engine.market.tickers.get(symbol, {}).get("price") or fallback)
+
+
+def _ticker(engine, symbol: str) -> dict:
+    f = getattr(engine, "funnel_ticker", None)
+    return f(symbol) if f else engine.market.tickers.get(symbol, {})
+
+
 async def run(engine, settings) -> int:
     """One funnel cycle. Returns the number of BUY/SELL decisions of stage 2."""
     kind, tf = engine.guard_kind, settings.timeframe
@@ -506,7 +517,7 @@ async def run(engine, settings) -> int:
         try:
             df, has_volume = await engine.funnel_frame(symbol, tf)
             i = closed_index(df, tf)
-            price = engine.market.tickers.get(symbol, {}).get("price") or float(df["close"].iloc[-1])
+            price = _price(engine, symbol, float(df["close"].iloc[-1]))
             m = metrics(df, i, has_volume, price, getattr(engine, "funnel_rich", False))
             m["tf"], m["range_edge"] = tf, range_edge(m)
             rows[symbol], frames[symbol] = m, (df, i, has_volume)
@@ -675,7 +686,7 @@ async def _deep(engine, settings, cand: dict, m: dict, frame: tuple, s1: dict) -
         await engine.log("AI_EVAL", f"{symbol}: PASS del modelo potente · confianza {res['confidence']}%" + (f" · regla «{res['rule']['text'][:80]}»" if res["rule"] else "") + f" · {res['reasoning'][:220]}{tail}")
         return 0
     side = "long" if res["decision"] == "BUY" else "short"
-    price = engine.market.tickers.get(symbol, {}).get("price") or m["price"]
+    price = _price(engine, symbol, m["price"])
     d = 1 if side == "long" else -1
     edge = cand.get("range_edge") if RANGE_SIDE.get(cand.get("range_edge")) == side else None
     ranging = bool(edge or m.get("regime"))
@@ -723,7 +734,7 @@ async def _deep(engine, settings, cand: dict, m: dict, frame: tuple, s1: dict) -
                                 f"SL {'fijo por ATR' if source == 'atr' else 'de la IA + margen'} · {res['reasoning'][:200]}{tail}")
     late = getattr(engine, "funnel_late_atr", None)
     if late:   # market entry: never chase a move that already left
-        t = engine.market.tickers.get(symbol, {})
+        t = _ticker(engine, symbol)
         d = 1 if side == "long" else -1
         px = (t.get("price") or price) + d * (t.get("spread") or 0) / 2   # ask for a buy, bid for a sell
         ran = (px - m["close"]) * d / m["atr"] if m["atr"] else 0

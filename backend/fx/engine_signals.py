@@ -51,7 +51,11 @@ class SignalsMixin:
         try:
             if self.running:
                 for symbol in {d["symbol"] for d in await self.db.positions.find({"strategy": {"$in": list(EXIT_ON_CROSS)}}, {"symbol": 1}).to_list(100)}:
-                    df = self._df(await self.market.fetch_klines(symbol, settings.timeframe, 300, cache_sec=60))
+                    try:
+                        df, _ = await self.funnel_frame(symbol, settings.timeframe, 300)
+                    except Exception as e:
+                        logger.warning(f"exit-on-cross {symbol}: {e}")
+                        continue
                     await self._exit_on_cross(symbol, df, len(df) - 2)
             await funnel.run(self, settings)
             self.last_scan = now_iso()
@@ -63,19 +67,6 @@ class SignalsMixin:
 
     funnel_rich = True          # fast EMAs, ADX slope, swings, range regime, over-extension filter and AI-stop buffer
     funnel_late_atr = 0.35      # a market entry is dropped when the price already ran this many ATR past the signal candle's close
-
-    async def funnel_frame(self, symbol: str, tf: str, limit: int = 300):
-        """Candles with the broker's tick volume while the bridge account is connected; Yahoo (no volume → candle range) otherwise."""
-        b = self.broker
-        if b and self.cfg and self.cfg.hfm_state == "DEPLOYED" and time.time() - b.chart_fail_ts > 60:
-            try:
-                rows = await b.candles(symbol, tf, None, limit, cache_sec=funnel.fresh_sec(tf, 45))
-                if rows and len(rows) >= 220:
-                    return self._df(rows), sum(r[5] for r in rows[-50:]) > 0
-            except Exception as e:
-                b.chart_fail_ts = time.time()
-                logger.warning(f"velas {self.bk} {symbol} {tf}: {e} → usando Yahoo")
-        return self._df(await self.market.fetch_klines(symbol, tf, limit, cache_sec=funnel.fresh_sec(tf, 60))), False
 
     @staticmethod
     def funnel_htf(tf: str) -> str:
@@ -89,8 +80,8 @@ class SignalsMixin:
         return {"htf": None, "atr_pips": round(pips(symbol, m["atr"]), 1)}
 
     def funnel_ctx(self, symbol: str) -> dict:
-        t = self.market.tickers.get(symbol, {})
-        return {"modo": self.mode_label, "cambio_dia_pct": t.get("change_pct"), "spread_pips": round(pips(symbol, t.get("spread") or SPECS[symbol]["spread"]), 1),
+        t = self.funnel_ticker(symbol)
+        return {"modo": self.mode_label, "cambio_dia_pct": t.get("change_pct"), "fuente_datos": "bróker (MetaTrader)" if t.get("source") == "broker" else "Yahoo Finance", "spread_pips": round(pips(symbol, t.get("spread") or SPECS[symbol]["spread"]), 1),
                 "sesiones_abiertas": [x["name"] for x in market_status()["sessions"] if x["open"]]}
 
     async def funnel_state(self, settings: FxSettings) -> dict:
@@ -149,6 +140,11 @@ class SignalsMixin:
                 return exp, "EXPOSICION", open_syms
         if self.live and self.hfm["down_since"]:
             return f"cuenta {self.bk} sin conexión con el puente MT", "BLOQUEADA", open_syms
+        if self.live and self.broker and not self.broker_tick(symbol):
+            await self.refresh_broker_ticks([symbol], force=True)
+            if not self.broker_tick(symbol):
+                why = self.__dict__.get("tick_errors", {}).get(symbol) or "sin cotización reciente"
+                return f"sin precio de {self.bk} para el par ({why}) · no se opera con precios de otra fuente", "BLOQUEADA", open_syms
         if self.live and self.cfg and symbol in (self.cfg.hfm_symbols_bad or []):
             return f"par no operable en {self.bk} con el sufijo de símbolos configurado (Ajustes → {self.bl} → Comprobar símbolos)", "BLOQUEADA", open_syms
         return None, None, open_syms

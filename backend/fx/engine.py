@@ -28,10 +28,11 @@ from fx.engine_core import (logger, INITIAL_BALANCE, LIVE_GRACE_SEC, HFM_HEALTH_
 from fx.engine_account import AccountMixin
 from fx.engine_positions import PositionsMixin
 from fx.engine_signals import SignalsMixin
+from fx.engine_feed import FeedMixin
 from fx.broker import HFM, BrokerProfile
 
 
-class FxEngine(AccountMixin, PositionsMixin, SignalsMixin):
+class FxEngine(FeedMixin, AccountMixin, PositionsMixin, SignalsMixin):
     guard_kind = "fx"
 
     def __init__(self, db, profile: BrokerProfile = HFM, market: FxMarket = None):
@@ -76,6 +77,7 @@ class FxEngine(AccountMixin, PositionsMixin, SignalsMixin):
                 await self.broker.aclose()
             self.broker = FxLiveBroker(*key, symbol_map=cfg.mt_symbol_map, suffixes=self.profile.suffixes, aliases=self.profile.symbol_aliases) if key[1] else None
             self._broker_key = key
+            self.broker_ticks, self.feed = {}, {}
             self.broker_error = None
             self.hfm = _fresh_health()
         elif self.broker and self.broker.symbol_map != cfg.mt_symbol_map:
@@ -123,7 +125,7 @@ class FxEngine(AccountMixin, PositionsMixin, SignalsMixin):
         async for s in self.db.signals.find({}, {"key": 1}).sort("_id", -1).limit(500):
             if s.get("key"):
                 self.signal_keys.add(s["key"])
-        await self.log("INFO", f"Motor {self.bl} iniciado · datos Yahoo Finance · mercado {'ABIERTO' if market_open() else 'CERRADO'} · bot {'ACTIVO' if self.running else 'DETENIDO'}")
+        await self.log("INFO", f"Motor {self.bl} iniciado · datos {'del bróker ' + self.bk + ' (puente MT)' if self.live else 'Yahoo Finance (bróker si el puente está conectado)'} · mercado {'ABIERTO' if market_open() else 'CERRADO'} · bot {'ACTIVO' if self.running else 'DETENIDO'}")
         self.tasks = [asyncio.create_task(self._monitor_loop()), asyncio.create_task(self._scan_loop())]
 
     async def shutdown(self):
@@ -181,7 +183,14 @@ class FxEngine(AccountMixin, PositionsMixin, SignalsMixin):
 
     async def _monitor_once(self):
         settings = await self.get_settings()
-        tickers = await self.market.fetch_tickers(settings.symbols)
+        try:
+            await self.market.fetch_tickers(settings.symbols)
+        except Exception as e:
+            if not self.live:
+                raise
+            logger.warning(f"yahoo tickers (REAL usa el bróker): {e}")
+        await self.refresh_broker_ticks(settings.symbols)
+        tickers = self.tickers
         now = datetime.now(timezone.utc)
         if settings.close_before_weekend and trade_guard.friday(now)["flat"]:
             ids = [str(d["_id"]) async for d in self.db.positions.find({}, {"_id": 1})]

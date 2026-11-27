@@ -127,7 +127,7 @@ def add_shared_routes(router, engine, label: str, currency: str = "USDT", before
         p = await _position(pos_id)
         if p.exit_mode == "cross":
             raise HTTPException(400, "Las posiciones del test de cruce EMA no tienen SL/TP editables")
-        price = (engine.market.tickers.get(p.symbol) or {}).get("price") or p.mark_price
+        price = ((getattr(engine, "tickers", None) or engine.market.tickers).get(p.symbol) or {}).get("price") or p.mark_price
         d = 1 if p.side == "long" else -1
         sl, tp = body.sl or p.sl, body.tp or p.tp
         if (price - sl) * d <= 0 or (tp - price) * d <= 0:
@@ -161,7 +161,7 @@ def add_shared_routes(router, engine, label: str, currency: str = "USDT", before
     async def manual_order(body: ManualOrder):
         """Manual market order from the chart: SL/TP chosen by the user, size by fixed-fractional risk. Bypasses AI, rules and filters; risk limits still apply."""
         settings = await engine.get_settings()
-        price = (engine.market.tickers.get(body.symbol) or {}).get("price")
+        price = ((getattr(engine, "tickers", None) or engine.market.tickers).get(body.symbol) or {}).get("price")
         if not price:
             raise HTTPException(400, "Sin precio en vivo para ese par")
         if getattr(engine, "profile", None) and not fx_market_open():

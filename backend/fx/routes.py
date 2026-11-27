@@ -33,11 +33,13 @@ logger = logging.getLogger(__name__)
 def register(router, engine, store):
     SESSION_LIST = [{"id": s[0], "name": s[1]} for s in SESSIONS]
 
-    def _status() -> dict:
-        return {"running": engine.running, "scanning": engine.scanning, "provider": "yahoo", "last_scan": engine.last_scan,
+    def _status(settings=None) -> dict:
+        feed = engine.data_feed(settings.symbols, settings.timeframe) if settings else None
+        return {"running": engine.running, "scanning": engine.scanning, "data_feed": feed,
+                "provider": "broker" if engine.live or (feed and feed["signals"] == "broker") else "yahoo", "last_scan": engine.last_scan,
                 "next_scan_in": max(0, int(engine.next_scan_ts - time.time())) if engine.next_scan_ts else None,
                 "mode": engine.mode_label, "env": engine.env, "account_kind": engine.account_kind(), "market": "Forex · Metales", "telegram": notify.is_on(), "ai": ai_current(), "ai_usage": ai_usage.snapshot(engine.profile.panel), "broker": engine.profile.broker, "bot_name": engine.profile.bot_name, "costs": {"label": engine.costs.label, "commission_lot_usd": engine.costs.commission_lot_usd, "spread_factor": engine.costs.spread_factor},
-                "exchange_error": engine.market.error, "broker_error": engine.broker_error if engine.live else None, "broker_health": engine.broker_health(),
+                "exchange_error": None if engine.live else engine.market.error, "broker_error": engine.broker_error if engine.live else None, "broker_health": engine.broker_health(),
                 "market_hours": market_status()}
 
     async def _equity_curve(limit: int = 1440) -> list:
@@ -62,11 +64,13 @@ def register(router, engine, store):
         logs = [LogEntry.from_mongo(d).model_dump() async for d in db.logs.find().sort("_id", -1).limit(100)]
         watchlist = []
         for sym in settings.symbols:
-            t = engine.market.tickers.get(sym, {})
+            t = engine.funnel_ticker(sym)
+            live_spread = t.get("source") == "broker" and t.get("spread") is not None
             watchlist.append({"symbol": sym, "name": SPECS[sym]["name"], "group": SPECS[sym]["group"], "price": t.get("price"), "change_pct": t.get("change_pct"),
-                              "high": t.get("high"), "low": t.get("low"), "spread_pips": round(pips(sym, engine.costs.spread(sym)), 1), "digits": SPECS[sym]["digits"],
+                              "high": t.get("high"), "low": t.get("low"), "spread_pips": round(pips(sym, t["spread"] if live_spread else engine.costs.spread(sym)), 1),
+                              "price_source": t.get("source") or ("yahoo" if t else None), "spread_live": live_spread, "digits": SPECS[sym]["digits"],
                               **engine.analysis.get(sym, {})})
-        return {"status": _status(), "settings": settings.model_dump(), "account": await engine.account_summary(), "positions": positions, "trades": trades,
+        return {"status": _status(settings), "settings": settings.model_dump(), "account": await engine.account_summary(), "positions": positions, "trades": trades,
                 "signals": signals, "logs": logs, "watchlist": watchlist, "equity": await _equity_curve(), "checkin": await engine.checkin(settings),
                 "hfm": {"configured": store.public()["hfm_configured"], "state": store.cfg.hfm_state, "connection": store.cfg.hfm_connection,
                         "verified_at": store.cfg.hfm_verified_at, "trade_allowed": store.cfg.hfm_trade_allowed, "live": engine.live}}
@@ -77,7 +81,7 @@ def register(router, engine, store):
         """Chart candles: the HFM terminal's own (what MetaTrader shows) while the bridge account is connected; Yahoo otherwise or on failure
         (60 s back-off kept on the broker instance → cleared on relink/test/reconnect)."""
         b = engine.broker
-        if b and store.cfg.hfm_state == "DEPLOYED" and time.time() - b.chart_fail_ts > 60:
+        if b and (engine.live or store.cfg.hfm_state == "DEPLOYED") and time.time() - b.chart_fail_ts > 60:
             try:
                 rows = await b.candles(symbol, tf, before, n)
                 if rows:

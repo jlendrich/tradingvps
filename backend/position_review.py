@@ -110,7 +110,8 @@ async def review_open_positions(engine, settings, currency: str, bot_name: str, 
     for doc in docs:
         p = Position.from_mongo(doc)
         try:
-            candles = _rows(await engine.market.fetch_klines(p.symbol, tf, CANDLES + 1, cache_sec=60))
+            feed = getattr(engine, "review_klines", None)
+            candles = _rows(await feed(p.symbol, tf, CANDLES + 1) if feed else await engine.market.fetch_klines(p.symbol, tf, CANDLES + 1, cache_sec=60))
             if len(candles) < 15:
                 continue
             price = candles[-1]["close"]

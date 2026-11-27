@@ -17,14 +17,14 @@ const BOTS = [
     title: <>HotForex <span className="text-sky-400">AI</span> Trading</>,
     subtitle: "Forex y metales · Oro, plata, EUR, GBP, CHF, CAD, NZD, JPY",
     desc: "Mismo Embudo IA adaptado a divisas: lotes y pips, volumen de ticks del bróker, bloqueo por eventos rojos de cada divisa y cuenta real HFM vía puente MetaTrader propio.",
-    tags: ["XAUUSD · XAGUSD · EURUSD…", "Paper trading · 1:100", "Yahoo Finance · HFM"],
+    tags: ["XAUUSD · XAGUSD · EURUSD…", "Paper trading · 1:100", "Paper: Yahoo · Real: datos HFM"],
   },
   {
     key: "pepper", path: "/pepperstone", icon: Flame, accent: "teal", overview: "/pepper/overview",
     title: <>Pepperstone <span className="text-teal-300">AI</span> trading</>,
     subtitle: "Forex y metales · Pepperstone vía puente MetaTrader propio (MT4 / MT5)",
     desc: "Instancia independiente del motor forex para Pepperstone: cuenta Razor (spread crudo + comisión) o Standard, símbolos sin sufijo, sus propios ajustes, plan, revisión IA y Telegram.",
-    tags: ["XAUUSD · XAGUSD · EURUSD…", "Razor / Standard", "Yahoo Finance · Pepperstone"],
+    tags: ["XAUUSD · XAGUSD · EURUSD…", "Razor / Standard", "Paper: Yahoo · Real: datos Pepperstone"],
   },
 ];
 const ACCENT = {

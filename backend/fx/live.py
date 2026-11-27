@@ -96,6 +96,30 @@ class FxLiveBroker:
         self._kcache[key] = (time.time(), rows)
         return rows
 
+    async def ticker(self, symbol: str, cache_sec: float = 4.0) -> dict:
+        """Live quote from the MT terminal: mid price, bid/ask, real spread and the day's change/high/low from the broker's D1 candles."""
+        hit = self._tcache.get(symbol) if hasattr(self, "_tcache") else None
+        if hit and time.time() - hit["_ts"] < cache_sec:
+            return hit
+        t = await self.api.tick(self.account_id, self.broker_symbol(symbol))
+        bid, ask = t.get("bid"), t.get("ask")
+        if bid is None or ask is None or float(bid) <= 0 or float(ask) <= 0:
+            raise BridgeError(0, f"el puente MT no devolvió bid/ask para {self.broker_symbol(symbol)}", kind="transient")
+        bid, ask = float(bid), float(ask)
+        price = (bid + ask) / 2
+        out = {"symbol": symbol, "price": price, "bid": bid, "ask": ask, "spread": ask - bid, "change_pct": None, "high": None, "low": None,
+               "volume_usdt": 0.0, "updated_at": int(time.time()), "source": "broker", "_ts": time.time()}
+        try:
+            d1 = await self.candles(symbol, "1d", None, 2, cache_sec=300)
+            if d1:
+                today = d1[-1]
+                prev = d1[-2][4] if len(d1) >= 2 else today[1]
+                out.update(change_pct=round((price - prev) / prev * 100, 3) if prev else None, high=max(today[2], price), low=min(today[3], price))
+        except Exception:
+            pass   # day stats are cosmetic: the quote itself is what matters
+        self.__dict__.setdefault("_tcache", {})[symbol] = out
+        return out
+
     def broker_symbol(self, symbol: str) -> str:
         return self.symbol_map.get(symbol) or f"{self.aliases.get(self.suffix, {}).get(symbol, symbol)}{self.suffix}"
 

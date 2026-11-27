@@ -56,7 +56,9 @@ export function buildFaq(bot) {
     { cat: "Riesgo", q: "¿Qué protecciones tiene una posición abierta?", tags: ["breakeven", "trailing", "parcial"],
       a: "Stop y objetivo desde la entrada, y de forma opcional stop a breakeven, trailing stop y cierre parcial de beneficios, cada uno con su interruptor. Además, la guardia de eventos rojos." },
     ...(fx ? [{ cat: "Riesgo", q: "¿De dónde sale el volumen en forex?", tags: ["volumen", "ticks", "tradingview", "yahoo"],
-      a: "Del volumen de ticks de tu bróker, a través de tu puente MetaTrader propio. El forex no tiene volumen centralizado y TradingView no ofrece una API pública de datos para esto. Sin cuenta conectada, el bot usa precios de Yahoo y mide la actividad con el rango de la vela y el ATR." }] : []),
+      a: "Del volumen de ticks de tu bróker, a través de tu puente MetaTrader propio. El forex no tiene volumen centralizado y TradingView no ofrece una API pública de datos para esto. Sin cuenta conectada, el bot usa precios de Yahoo y mide la actividad con el rango de la vela y el ATR." },
+      { cat: "Riesgo", q: "En modo REAL, ¿de dónde salen las señales y los precios?", tags: ["real", "yahoo", "bróker", "velas", "spread", "datos"],
+        a: "Todo sale de tu cuenta del bróker por el puente MetaTrader: velas de la temporalidad de entrada y de las superiores (con volumen de ticks), precio bid/ask, spread real y variación del día. Yahoo Finance no se usa para operar en REAL. Si el puente no entrega las velas de un par (fallo o menos de 220 velas) o su cotización, ese par no abre operaciones nuevas hasta que vuelvan los datos; el panel lo indica en la etiqueta de datos de la cabecera y en un aviso ámbar." }] : []),
 
     { cat: "Aprendizaje y revisión", q: "¿Qué son las reglas aprendidas?", tags: ["reglas", "aprendizaje"],
       a: "Frases que la IA extrae de las pérdidas evitables («no comprar pegado a una oferta con ADX bajo»). El modelo potente las recibe en cada análisis y responde PASS si la operación incumple alguna. Las gestionas en Ajustes → Reglas aprendidas." },

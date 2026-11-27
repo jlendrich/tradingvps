@@ -21,7 +21,7 @@ def _costs(engine):
 
 async def open_shadow(engine, signal_id: str, symbol: str, sig: dict, settings, kind: str, acc: dict,
                       ai_confidence: int = 0, ai_risk: str = "-", risk_factor: float = 1.0, note: str = "", rule_id: str = None):
-    tickers = engine.market.tickers
+    tickers = getattr(engine, "tickers", None) or engine.market.tickers
     news_ctx = engine.news.context(symbol) if getattr(engine, "news", None) else None
     news_risk = ((news_ctx or {}).get("mercado") or {}).get("risk") or "SIN_DATO"
     entry = tickers.get(symbol, {}).get("price") or sig["price"]

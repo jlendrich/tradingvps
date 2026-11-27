@@ -1,12 +1,9 @@
 import { createContext, useContext } from "react";
 import { Landmark, Flame } from "lucide-react";
+import { dataLabel, dataTooltip } from "./feedLabels";
 
 // Branding of the two MetaTrader bots that share the FX dashboard. `bot` = "fx" (HotForex) | "pepper" (Pepperstone).
 const liveLabel = (bk) => (status) => `Modo REAL · ${bk}${/demo/i.test(status.env || "") ? "" : " Live"}`;
-const dataLabel = (bk) => (status) => (status.mode === "REAL" ? `Señales: Yahoo · Ejecución: ${bk}` : "Datos: Yahoo Finance");
-const dataTooltip = (bk) => (status) => (status.mode === "REAL"
-  ? `Las señales se calculan con velas de Yahoo Finance; las órdenes, el PnL y la equidad vienen de tu cuenta ${bk} vía puente MetaTrader.`
-  : `Precios y velas de Yahoo Finance (sin API key): pares spot y futuros de oro (GC=F) y plata (SI=F) que replican el spot. En modo REAL las órdenes y el PnL vienen de tu cuenta ${bk} vía puente MetaTrader.`);
 const resetHint = (bk) => `Se borrarán posiciones, historial, señales, operaciones de noticias y curva de equidad. En paper el balance vuelve al capital inicial configurado (por defecto $500); en REAL las estadísticas parten de la equidad actual de ${bk}.`;
 
 export const BRANDS = {

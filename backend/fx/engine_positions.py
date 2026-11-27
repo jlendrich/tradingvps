@@ -17,13 +17,17 @@ from fx.engine_core import logger, LIVE_GRACE_SEC, TRANSIENT_TG_SEC, PENDING_TTL
 
 
 class PositionsMixin:
+    def _prices(self) -> dict:
+        """Engine prices (FeedMixin.tickers: broker quotes in REAL) with the plain market tickers as fallback for lightweight stubs."""
+        return getattr(self, "tickers", None) or self.market.tickers
+
     def _excursion(self, p: Position, price: float) -> dict:
         m = risk.move_in_r(p.side, p.entry_price, p.initial_sl, price)
         return {"mfe_r": round(max(p.mfe_r, m), 3), "mae_r": round(max(p.mae_r, -m), 3)}
 
     async def _manage_paper_position(self, p: Position, price: float, rules: dict, now: datetime, rollover: bool = False):
         """One monitor tick for a PAPER position: MFE/MAE, SL/TP (skipped during the rollover spread spike), time stop, partial take-profit, trailing."""
-        tickers = self.market.tickers
+        tickers = self._prices()
         updates = self._excursion(p, price)
         p.mfe_r, p.mae_r = updates["mfe_r"], updates["mae_r"]
         if p.exit_mode == "cross":  # Test cruce EMA: only the safety SL (no TP/partial/BE/trailing); the opposite cross is the normal exit
@@ -99,7 +103,7 @@ class PositionsMixin:
         label = trade_guard.event_label(event)
         if (p.sl >= be) if long else (p.sl <= be):
             return True
-        price = self.market.tickers.get(p.symbol, {}).get("price") or p.mark_price
+        price = self._prices().get(p.symbol, {}).get("price") or p.mark_price
         if (price > be) if long else (price < be):
             if p.live:
                 try:
@@ -134,7 +138,7 @@ class PositionsMixin:
                     r = await self.broker.close_partial(p.order_id, part, p.link_id)
                     if r.get("position_id"):   # MetaTrader 4 re-tickets the remainder of a partial close
                         p.order_id = updates["order_id"] = r["position_id"]
-                    gross = risk.pnl(p.symbol, p.side, p.entry_price, price, part, self.market.tickers)
+                    gross = risk.pnl(p.symbol, p.side, p.entry_price, price, part, self._prices())
                     updates.update(qty=round(p.qty - part, 8), margin=round(p.margin * (p.qty - part) / p.qty, 6), partial_done=True,
                                    partial_gross=round(p.partial_gross + gross, 6), partial_fees=round(p.partial_fees + abs(r.get("commission") or 0), 6),
                                    initial_qty=p.initial_qty or p.qty)
@@ -239,7 +243,7 @@ class PositionsMixin:
                     r = await self.broker.close_partial(p.order_id, part, p.link_id)
                     if r.get("position_id"):   # MetaTrader 4 re-tickets the remainder of a partial close
                         p.order_id = updates["order_id"] = r["position_id"]
-                    gross = risk.pnl(p.symbol, p.side, p.entry_price, price, part, self.market.tickers)
+                    gross = risk.pnl(p.symbol, p.side, p.entry_price, price, part, self._prices())
                     updates.update(qty=round(p.qty - part, 8), margin=round(p.margin * (p.qty - part) / p.qty, 6), partial_done=True,
                                    partial_gross=round(p.partial_gross + gross, 6), partial_fees=round(p.partial_fees + abs(r.get("commission") or 0), 6),
                                    initial_qty=p.initial_qty or p.qty)
@@ -284,7 +288,7 @@ class PositionsMixin:
                 logger.warning(f"hfm deals {p.symbol}: {e}")
             price = (cr or {}).get("exit") or p.mark_price
             fees = cr["fees"] if cr else p.fees + p.partial_fees
-            net = cr["pnl"] if cr else risk.pnl(p.symbol, p.side, p.entry_price, price, p.qty, self.market.tickers) + p.partial_gross - p.fees - p.partial_fees
+            net = cr["pnl"] if cr else risk.pnl(p.symbol, p.side, p.entry_price, price, p.qty, self._prices()) + p.partial_gross - p.fees - p.partial_fees
             reason = (cr or {}).get("reason") or ("SL" if p.exit_mode == "cross" else "TP" if abs(price - p.tp) <= abs(price - p.sl) else ("TRAILING" if p.breakeven else "SL"))
             if reason == "SL" and p.breakeven:
                 reason = "BREAKEVEN" if p.exit_mode == "cross" else "TRAILING"
@@ -345,7 +349,7 @@ class PositionsMixin:
         `exit_mode="cross"` (Test cruce EMA): only the 3×ATR safety SL is sent (no TP), the position uses no slot and closes on the opposite cross."""
         risk_pct = settings.risk_per_trade * risk_factor
         cross = exit_mode == "cross"
-        tickers = self.market.tickers
+        tickers = self._prices()
         async with self.lock:
             open_docs = await self.db.positions.find({}, {"symbol": 1, "side": 1, "horizon": 1, "exit_mode": 1}).to_list(100)
             slot = None if cross else self._slot_block(open_docs, settings, horizon)
@@ -457,7 +461,7 @@ class PositionsMixin:
         return pos, None
 
     async def close_position(self, pos_id: str, price: float = None, reason: str = "MANUAL"):
-        tickers = self.market.tickers
+        tickers = self._prices()
         async with self.lock:
             doc = await self.db.positions.find_one({"_id": ObjectId(pos_id)})
             if not doc:

@@ -147,9 +147,9 @@ class TestClosedCandles:
 
     def test_engines_refetch_after_the_close(self):
         import engine
-        from fx import engine_signals
+        from fx import engine_feed
         assert "cache_sec=funnel.fresh_sec(tf, 30)" in inspect.getsource(engine.TradingEngine.funnel_frame)
-        assert inspect.getsource(engine_signals.SignalsMixin.funnel_frame).count("funnel.fresh_sec(tf,") == 2
+        assert inspect.getsource(engine_feed.FeedMixin.funnel_frame).count("funnel.fresh_sec(tf,") == 3   # REAL broker · paper broker · Yahoo
 
     @pytest.mark.asyncio
     async def test_run_evaluates_the_closed_candle(self, monkeypatch):
