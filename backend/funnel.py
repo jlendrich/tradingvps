@@ -42,25 +42,34 @@ RANGE_SIDE = {"EXTREMO_OFERTA": "short", "EXTREMO_DEMANDA": "long"}
 RANGE_SL_ATR_BAND, RANGE_SL_BUFFER_ATR, RANGE_EDGE_GAP_ATR, RANGE_TOUCH_ATR = (0.65, 1.05), 0.15, 0.05, 0.15
 
 
-FOLLOW_UPS = {"1h": (300, 5)}   # timeframe → (seconds between follow-up scans, how many) after the close scan: 1h bots re-scan the forming candle at :05 … :25
+FOLLOW_UPS = {"1h": (300, 5)}   # timeframe → default (seconds between follow-up scans, how many) after the close scan: 1h bots re-scan the forming candle at :05 … :25
 
 
-def next_trigger(tf: str = "15m", now: float = None) -> float:
-    """Epoch of the next scan of `tf`: its candle close (UTC-aligned) + safety delay, plus the follow-up marks of FOLLOW_UPS inside the new candle."""
+def follow_ups(tf: str, settings=None) -> tuple:
+    """(seconds between follow-up scans, how many) of a bot: its own settings (followup_minutes / followup_count) on the timeframes of FOLLOW_UPS, (0, 0) elsewhere."""
+    if tf not in FOLLOW_UPS:
+        return 0, 0
+    every, count = FOLLOW_UPS[tf]
+    every, count = int(getattr(settings, "followup_minutes", every // 60)) * 60, int(getattr(settings, "followup_count", count))
+    return (every, count) if count > 0 and every > 0 else (0, 0)
+
+
+def next_trigger(tf: str = "15m", now: float = None, follow: tuple = None) -> float:
+    """Epoch of the next scan of `tf`: its candle close (UTC-aligned) + safety delay, plus the follow-up marks (`follow`, FOLLOW_UPS by default) inside the new candle."""
     now = time.time() if now is None else now
     step = TF_SECONDS[tf]
-    every, count = FOLLOW_UPS.get(tf, (0, 0))
+    every, count = FOLLOW_UPS.get(tf, (0, 0)) if follow is None else follow
     base = (now - TRIGGER_DELAY_SEC) // step * step + TRIGGER_DELAY_SEC   # last close scan
     return next(t for t in (*(base + k * every for k in range(1, count + 1)), base + step) if t > now)
 
 
-def forming_minute(tf: str, now: float = None) -> int | None:
-    """Minute of the forming candle while a follow-up scan of `tf` is due (1h: 5 … 25); None on the close scan and on every other timeframe."""
+def forming_minute(tf: str, now: float = None, follow: tuple = None) -> int | None:
+    """Minute of the forming candle while a follow-up scan of `tf` is due (1h default: 5 … 25); None on the close scan and on every other timeframe."""
     if tf not in FOLLOW_UPS:
         return None
-    every, count = FOLLOW_UPS[tf]
+    every, count = FOLLOW_UPS[tf] if follow is None else follow
     sec = (time.time() if now is None else now) % TF_SECONDS[tf]
-    return int(sec // 60) if every <= sec < every * count + 60 else None
+    return int(sec // 60) if count and every <= sec < every * count + 60 else None
 
 
 def live_candle(df, i: int, tf: str, atr: float, price: float, minute: int, now: float = None) -> dict | None:
@@ -82,15 +91,16 @@ def _live_txt(lc: dict) -> str:
             + (f" · RSI en vivo {lc['rsi']}" if lc.get("rsi") is not None else ""))
 
 
-async def schedule(engine, tf: str) -> float:
-    """Next scan of the engine; logged when the bot starts and whenever its timeframe changes."""
-    ts = next_trigger(tf)
-    if getattr(engine, "scan_tf", None) != tf:
+async def schedule(engine, tf: str, settings=None) -> float:
+    """Next scan of the engine; logged when the bot starts and whenever its timeframe or its follow-up settings change."""
+    follow = every, count = follow_ups(tf, settings)
+    ts = next_trigger(tf, follow=follow)
+    if (getattr(engine, "scan_tf", None), getattr(engine, "scan_follow", follow)) != (tf, follow):
         engine.scan_tf = tf
-        every, count = FOLLOW_UPS.get(tf, (0, 0))
-        await engine.log("INFO", (f"Próximo escaneo de seguimiento de la vela {tf} en curso" if forming_minute(tf, ts) is not None else f"Próximo escaneo al cierre de vela {tf}")
+        await engine.log("INFO", (f"Próximo escaneo de seguimiento de la vela {tf} en curso" if forming_minute(tf, ts, follow) is not None else f"Próximo escaneo al cierre de vela {tf}")
                          + f": {datetime.fromtimestamp(ts, timezone.utc):%H:%M:%S} UTC"
                          + (f" · cierre de vela + {count} seguimientos cada {every // 60} min (hasta el minuto {every * count // 60})" if count else ""))
+    engine.scan_follow = follow
     return ts
 
 
@@ -569,7 +579,8 @@ async def run(engine, settings) -> int:
     tfs = engine.funnel_tfs = mtf_of(tf)
     ctx_txt = "/".join(t.upper() for t in tfs)
     rows, frames = {}, {}
-    minute = forming_minute(tf)
+    follow = follow_ups(tf, settings)
+    minute = forming_minute(tf, follow=follow)
     for symbol in settings.symbols:
         try:
             df, has_volume = await engine.funnel_frame(symbol, tf)
@@ -701,7 +712,7 @@ async def run(engine, settings) -> int:
                                  + (f": {', '.join(c['symbol'] + ' ' + c['side'].upper() for c in s1['candidates'])}" if picked else "") + f" · {s1['model']} · {s1['ms']} ms")
     found = 0
     deep_at = engine.__dict__.setdefault("funnel_deep_at", {})
-    cooldown = min(DEEP_COOLDOWN_SEC, FOLLOW_UPS[tf][0] - 30) if tf in FOLLOW_UPS else DEEP_COOLDOWN_SEC   # follow-up scans are 5 min apart: none may be swallowed
+    cooldown = min(DEEP_COOLDOWN_SEC, follow[0] - 30) if follow[1] else DEEP_COOLDOWN_SEC   # follow-up scans may be exactly 5 min apart: none may be swallowed
     for cand in s1["candidates"][:limit]:
         if cand["symbol"] not in eligible or time.time() - deep_at.get(cand["symbol"], 0) < cooldown:
             continue

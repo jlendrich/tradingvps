@@ -1,6 +1,6 @@
 from typing import Optional, List, Dict
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-from models import STRATEGY_KEYS, SIGNAL_MODES
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from models import STRATEGY_KEYS, SIGNAL_MODES, fit_followups
 from fx.symbols import AVAILABLE, DEFAULT_SYMBOLS
 from fx.market import SESSION_IDS
 
@@ -15,6 +15,9 @@ class FxSettings(BaseModel):
     model_config = ConfigDict(extra="ignore")
     strategy: str = "all"
     timeframe: str = "1h"
+    followup_count: int = 5      # 1h only: follow-up scans of the forming candle after the close scan (0 = close scan only)
+    followup_minutes: int = 5    # minutes between them
+    _fit_followups = model_validator(mode="after")(fit_followups)
     symbols: List[str] = list(DEFAULT_SYMBOLS)
     risk_per_trade: float = 1.0
     max_positions: int = 5
@@ -197,6 +200,8 @@ class FxSettings(BaseModel):
 class FxSettingsUpdate(BaseModel):
     strategy: Optional[str] = None
     timeframe: Optional[str] = None
+    followup_count: Optional[int] = Field(default=None, ge=0, le=10)
+    followup_minutes: Optional[int] = Field(default=None, ge=5, le=30)
     symbols: Optional[List[str]] = None
     risk_per_trade: Optional[float] = Field(default=None, ge=0.1, le=5)
     max_positions: Optional[int] = Field(default=None, ge=1, le=12)

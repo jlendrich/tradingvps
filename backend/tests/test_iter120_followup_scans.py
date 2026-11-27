@@ -223,7 +223,7 @@ class TestCooldownAndSignalContext:
         """Cooldown must be shorter than the 5-min spacing of follow-ups so none is swallowed."""
         import inspect
         src = inspect.getsource(funnel.run)
-        assert "min(DEEP_COOLDOWN_SEC, FOLLOW_UPS[tf][0] - 30)" in src
+        assert "min(DEEP_COOLDOWN_SEC, follow[0] - 30)" in src
         # Effective cooldown: min(300, 300-30) = 270
         assert min(funnel.DEEP_COOLDOWN_SEC, funnel.FOLLOW_UPS["1h"][0] - 30) == 270
 

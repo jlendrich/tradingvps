@@ -48,10 +48,22 @@ class BaseDocument(BaseModel):
         return data
 
 
+FOLLOWUP_LAST_MIN = 55   # the last follow-up scan of an hour must fire before this minute
+
+
+def fit_followups(s):
+    """Keeps the follow-up scans inside their candle: count × minutes ≤ FOLLOWUP_LAST_MIN."""
+    s.followup_count = max(0, min(s.followup_count, FOLLOWUP_LAST_MIN // max(1, s.followup_minutes)))
+    return s
+
+
 class Settings(BaseModel):
     model_config = ConfigDict(extra="ignore")
     strategy: str = "all"
     timeframe: str = "1h"
+    followup_count: int = 5      # 1h only: follow-up scans of the forming candle after the close scan (0 = close scan only)
+    followup_minutes: int = 5    # minutes between them
+    _fit_followups = model_validator(mode="after")(fit_followups)
     symbols: List[str] = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "AVAXUSDT", "LINKUSDT"]
     risk_per_trade: float = 1.0
     max_positions: int = 3
@@ -212,6 +224,8 @@ class Settings(BaseModel):
 class SettingsUpdate(BaseModel):
     strategy: Optional[str] = None
     timeframe: Optional[str] = None
+    followup_count: Optional[int] = Field(default=None, ge=0, le=10)
+    followup_minutes: Optional[int] = Field(default=None, ge=5, le=30)
     symbols: Optional[List[str]] = None
     risk_per_trade: Optional[float] = Field(default=None, ge=0.1, le=5)
     max_positions: Optional[int] = Field(default=None, ge=1, le=10)

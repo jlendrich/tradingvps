@@ -108,7 +108,7 @@ class TestSchedule:
         from fx import engine_signals
         for mod in (engine, engine_signals):
             src = inspect.getsource(mod)
-            assert "await funnel.schedule(self, settings.timeframe)" in src and "next_trigger()" not in src
+            assert "await funnel.schedule(self, settings.timeframe, settings)" in src and "next_trigger()" not in src
 
     @pytest.mark.asyncio
     async def test_scan_loop_recalculates_without_restart(self, monkeypatch):
@@ -455,4 +455,4 @@ class TestFollowUpGuards:
     def test_15m_bots_keep_the_5_minute_cooldown(self):
         assert funnel.DEEP_COOLDOWN_SEC == 300 and "15m" not in funnel.FOLLOW_UPS
         src = inspect.getsource(funnel.run)
-        assert "if tf in FOLLOW_UPS else DEEP_COOLDOWN_SEC" in src and "tf in FOLLOW_UPS and engine.__dict__.get(\"funnel_opened\"" in src
+        assert "if follow[1] else DEEP_COOLDOWN_SEC" in src and "tf in FOLLOW_UPS and engine.__dict__.get(\"funnel_opened\"" in src

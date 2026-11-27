@@ -9,6 +9,7 @@ import { Panel } from "./Panel";
 
 import AiPositionReviewSettings from "./settings/AiPositionReviewSettings";
 import AtrLevelsSettings from "./settings/AtrLevelsSettings";
+import FollowUpSettings, { maxFollowUps } from "./settings/FollowUpSettings";
 
 const NUMS = [
   { k: "risk_per_trade", label: "Riesgo por operación (%)", step: 0.1, min: 0.1, max: 5 },
@@ -65,6 +66,7 @@ export default function SettingsPanel({ settings, meta, profileActive, onSave, o
     delete body.bot_running;
     delete body.symbol_params;
     body.ai_min_confidence = Number(form.ai_min_confidence);
+    if ("followup_minutes" in body) body.followup_count = Math.min(Number(body.followup_count), maxFollowUps(Number(body.followup_minutes)));
     const ok = await onSave(body);
     setSaving(false);
     if (ok) {
@@ -91,6 +93,7 @@ export default function SettingsPanel({ settings, meta, profileActive, onSave, o
         El modelo potente termina su análisis con un % de confianza de éxito. Si supera el {form.ai_min_confidence} % la operación se ejecuta; si no, se rechaza y se sigue como operación sombra para saber si el umbral es demasiado estricto.
         Mientras el modelo rápido siga eligiendo un par y queden huecos, vuelve al modelo potente al cierre de cada vela de la temporalidad del bot hasta que haya una operación ejecutable.
       </p>
+      <FollowUpSettings form={form} set={set} />
       <div>
         <p className="mb-1.5 font-mono text-[10px] uppercase tracking-wider text-slate-500">Pares a operar ({form.symbols.length})</p>
         <div className="flex flex-wrap gap-1.5">
