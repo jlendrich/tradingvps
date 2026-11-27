@@ -3,10 +3,13 @@ import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { http, errMsg, fmtPrice } from "@/lib/api";
+import { ManageSection, manageDefaults, manageValid } from "./ManageSection";
 
 const MULTS = [2, 4, 5, 6, 8];
 const INPUT = "num h-9 w-full rounded-sm border border-[#1E293B] bg-[#07090E] px-2 text-sm text-slate-100 outline-none focus:border-amber-500/60";
 const LABEL = "mb-1 block font-mono text-[10px] uppercase tracking-wider text-slate-500";
+
+const toPayload = (m) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, typeof v === "boolean" ? v : k === "partial_tp_pct" ? Math.round(Number(v)) : Number(v)]));
 
 export default function ManualOrderDialog({ side, symbol, price, atr, digits, tf, trade, onClose }) {
   const d = side === "long" ? 1 : -1;
@@ -16,11 +19,12 @@ export default function ManualOrderDialog({ side, symbol, price, atr, digits, tf
   const [sl, setSl] = useState("");
   const [tp, setTp] = useState("");
   const [risk, setRisk] = useState(trade.riskPct);
+  const [manage, setManage] = useState(manageDefaults(trade.settings, !!trade.noTp));
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!side) return;
-    setSlK(2); setTpK(4); setRisk(trade.riskPct);
+    setSlK(2); setTpK(4); setRisk(trade.riskPct); setManage(manageDefaults(trade.settings, !!trade.noTp));
     setSl(level(2, -d)); setTp(level(4, d));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [side, symbol]);
@@ -31,11 +35,11 @@ export default function ManualOrderDialog({ side, symbol, price, atr, digits, tf
   const rr = dist > 0 ? Math.abs(Number(tp) - price) / dist : 0;
   const riskUsd = (trade.equity || 0) * (Number(risk) || 0) / 100;
   const noTp = !!trade.noTp;  // EMA-only bot: no take profit, the trade leaves on the opposite EMA cross
-  const valid = atr > 0 && Number(sl) > 0 && (price - Number(sl)) * d > 0 && (noTp || (Number(tp) > 0 && (Number(tp) - price) * d > 0)) && Number(risk) >= 0.1 && Number(risk) <= 5;
+  const valid = atr > 0 && Number(sl) > 0 && (price - Number(sl)) * d > 0 && (noTp || (Number(tp) > 0 && (Number(tp) - price) * d > 0)) && Number(risk) >= 0.1 && Number(risk) <= 5 && manageValid(manage);
   const submit = async () => {
     setBusy(true);
     try {
-      await http.post("/manual-order", { symbol, side, sl: Number(sl), ...(noTp ? {} : { tp: Number(tp) }), atr, risk_pct: Number(risk) });
+      await http.post("/manual-order", { symbol, side, sl: Number(sl), ...(noTp ? {} : { tp: Number(tp) }), atr, risk_pct: Number(risk), manage: toPayload(manage) });
       toast.success(`${long ? "Compra" : "Venta"} manual de ${symbol} abierta`);
       trade.onDone?.();
       onClose();
@@ -49,7 +53,7 @@ export default function ManualOrderDialog({ side, symbol, price, atr, digits, tf
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent data-testid="manual-order-dialog" className="z-[80] max-w-md border-[#1E293B] bg-[#0D111A] text-slate-200">
+      <DialogContent data-testid="manual-order-dialog" className="z-[80] max-h-[92vh] max-w-lg overflow-y-auto border-[#1E293B] bg-[#0D111A] text-slate-200">
         <DialogHeader>
           <DialogTitle className={long ? "text-emerald-400" : "text-rose-400"}>{long ? "Comprar" : "Vender"} {symbol} · manual</DialogTitle>
           <DialogDescription className="text-slate-400">
@@ -65,6 +69,7 @@ export default function ManualOrderDialog({ side, symbol, price, atr, digits, tf
           <label className="col-span-2"><span className={LABEL}>Riesgo de la operación (% de la equidad)</span>
             <input data-testid="manual-order-risk-input" type="number" step={0.1} min={0.1} max={5} value={risk} onChange={(e) => setRisk(e.target.value)} className={INPUT} /></label>
         </div>
+        <ManageSection manage={manage} onChange={setManage} />
         <p data-testid="manual-order-summary" className="font-mono text-[11px] text-slate-400">
           Riesgo ≈ {riskUsd.toFixed(2)} {trade.currency} si salta el SL · {noTp ? "sin TP: se cierra en el cruce contrario de las EMAs" : `R:R ${rr.toFixed(2)}`} · tamaño = riesgo ÷ distancia al SL, ajustado al lote mínimo del bróker al enviar.
         </p>

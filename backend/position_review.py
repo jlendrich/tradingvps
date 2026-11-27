@@ -34,6 +34,20 @@ def due(engine, settings) -> bool:
     return time.time() - last >= max(5, int(settings.ai_position_review_minutes)) * 60
 
 
+async def manual_due(engine, settings) -> bool:
+    """Global review off, but some manual operation opted in: same interval, mode and confidence from Settings."""
+    if getattr(settings, "ai_position_review_enabled", False) or not (settings.ai_enabled and engine.running):
+        return False
+    if time.time() - getattr(engine, "_ai_review_last", 0.0) < max(5, int(settings.ai_position_review_minutes)) * 60:
+        return False
+    return bool(await engine.db.positions.count_documents({"manage.ai_review": True}))
+
+
+def _wanted(doc, settings) -> bool:
+    opt = (doc.get("manage") or {}).get("ai_review")
+    return opt if opt is not None else bool(getattr(settings, "ai_position_review_enabled", False))
+
+
 async def _breakeven(engine, p: Position, price: float) -> bool:
     long = p.side == "long"
     better = (price > p.entry_price > p.sl) if long else (price < p.entry_price < p.sl)
@@ -86,7 +100,8 @@ async def review_open_positions(engine, settings, currency: str, bot_name: str, 
     tf = getattr(settings, "timeframe", "1h")
     mode, min_conf = settings.ai_position_review_mode, int(settings.ai_position_review_min_confidence)
     crypto = currency == "USDT"
-    docs = [d for d in docs if d.get("exit_mode") != "cross"]  # Test cruce EMA positions are immune to the AI review
+    opted = lambda d: (d.get("manage") or {}).get("ai_review") is True  # noqa: E731
+    docs = [d for d in docs if (d.get("exit_mode") != "cross" or opted(d)) and (force or _wanted(d, settings))]  # EMA-cross positions only when opted in manually
     if not docs:
         return []
     if trigger:

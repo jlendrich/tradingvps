@@ -376,7 +376,7 @@ class PositionsMixin:
                                f"ATR {f(sig['atr'])}" + (f" · SL {k[0]:g}×ATR · TP {k[1]:g}×ATR" if k else "") + f" · entrada {f(entry)} · SL {f(sl)} · TP {f(tp)}")
 
     async def open_position(self, symbol: str, sig: dict, settings: FxSettings, signal_id: str, risk_factor: float = 1.0,
-                            risk_reason: str = "noticias", expires_at: str = None, horizon: str = "short", exit_mode: str = None):
+                            risk_reason: str = "noticias", expires_at: str = None, horizon: str = "short", exit_mode: str = None, manage: dict = None):
         """Returns (Position | None, reason) — reason explains why nothing was opened.
         `exit_mode="cross"` (Test cruce EMA): only the 3×ATR safety SL is sent (no TP), the position uses no slot and closes on the opposite cross."""
         risk_factor = 1.0  # fixed-fractional risk: no filter may change the size
@@ -457,7 +457,7 @@ class PositionsMixin:
                 margin = lots * SPECS[symbol]["contract"] * risk.base_usd(symbol, tickers, entry) / leverage
                 pos = Position(symbol=symbol, side=sig["side"], strategy=sig["strategy"], entry_price=entry, qty=lots, initial_qty=lots, leverage=leverage, margin=margin,
                                sl=sl, tp=tp, initial_sl=sl, atr=sig["atr"], fees=fee, mark_price=price, signal_id=signal_id, expires_at=expires_at,
-                               live=True, order_id=r["position_id"], link_id=r["link_id"], horizon=horizon, exit_mode=exit_mode)
+                               live=True, order_id=r["position_id"], link_id=r["link_id"], horizon=horizon, exit_mode=exit_mode, manage=manage)
                 res = await self.db.positions.insert_one(pos.to_mongo())
                 pos.id = str(res.inserted_id)
                 if not r["filled"]:
@@ -477,7 +477,7 @@ class PositionsMixin:
                 fee = risk.spread_cost(symbol, lots, tickers)
                 pos = Position(symbol=symbol, side=sig["side"], strategy=sig["strategy"], entry_price=entry, qty=lots, initial_qty=lots, leverage=settings.leverage,
                                margin=margin, sl=sl, tp=tp, initial_sl=sl, atr=sig["atr"], fees=fee, mark_price=price, signal_id=signal_id, expires_at=expires_at, horizon=horizon,
-                               exit_mode=exit_mode)
+                               exit_mode=exit_mode, manage=manage)
                 res = await self.db.positions.insert_one(pos.to_mongo())
                 pos.id = str(res.inserted_id)
                 await self.db.account.update_one({"_id": "main"}, {"$inc": {"balance": -fee}})

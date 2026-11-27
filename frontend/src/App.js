@@ -109,7 +109,7 @@ function Dashboard({ onLogout }) {
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
           <Watchlist items={data.watchlist} selected={symbol} onSelect={setSymbol} />
           <PriceChart symbol={symbol} defaultTf={data.settings.timeframe}
-            trade={{ riskPct: data.settings.risk_per_trade, equity: data.account.equity, live: data.status.mode === "REAL", currency: "USDT", onDone: refresh }} />
+            trade={{ riskPct: data.settings.risk_per_trade, equity: data.account.equity, live: data.status.mode === "REAL", currency: "USDT", onDone: refresh, settings: data.settings }} />
           <BotPanel settings={data.settings} meta={meta} account={data.account} equity={data.equity} profileActive={data.profile_active} rulesOnly />
         </div>
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 lg:items-start">

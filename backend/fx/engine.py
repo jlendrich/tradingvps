@@ -295,12 +295,12 @@ class FxEngine(AccountMixin, PositionsMixin, SignalsMixin):
             if p.live:
                 local_ids.add(p.order_id)
                 if ex is not None:
-                    await self._sync_live_position(p, ex.get(p.order_id), tickers.get(p.symbol), settings, now, rules)
+                    await self._sync_live_position(p, ex.get(p.order_id), tickers.get(p.symbol), settings, now, risk.pos_rules(rules, p))
                 continue
             t = tickers.get(p.symbol)
             if not t:
                 continue
-            await self._manage_paper_position(p, t["price"], rules, now, rollover and not is_crypto(p.symbol))
+            await self._manage_paper_position(p, t["price"], risk.pos_rules(rules, p), now, rollover and not is_crypto(p.symbol))
         if ex:
             for pid, xp in ex.items():
                 if pid in local_ids:
@@ -314,7 +314,7 @@ class FxEngine(AccountMixin, PositionsMixin, SignalsMixin):
             await self._expire_pending(now)
         await monitor_shadows(self, tickers, settings, now)
         await self._update_account_metrics(settings)
-        if market_open(now) and position_review.due(self, settings):
+        if market_open(now) and (position_review.due(self, settings) or await position_review.manual_due(self, settings)):
             await position_review.review_open_positions(self, settings, self.ccy, self.profile.bot_name)
 
     async def _hfm_health(self, synced: bool):

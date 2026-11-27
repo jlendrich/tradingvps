@@ -111,7 +111,8 @@ def add_shared_routes(router, engine, label: str, currency="USDT", before_unit: 
                "reasons": ["Operación manual desde el gráfico"], "indicators": {"atr": body.atr}, "key_ts": int(time.time() * 1000), "tp_mode": "fixed"}
         await engine.log("ORDER", f"{body.symbol}: orden MANUAL {body.side.upper()} · riesgo {body.risk_pct:g}% · SL {body.sl:.6g} · " + ("sin TP, salida en el cruce contrario de EMAs" if cross else f"TP {body.tp:.6g}"))
         engine._open_fail = None
-        res = await engine.open_position(body.symbol, sig, settings.model_copy(update={"risk_per_trade": body.risk_pct}), None, **({"exit_mode": "cross"} if cross else {}))
+        extra = {**({"exit_mode": "cross"} if cross else {}), **({"manage": body.manage.model_dump()} if body.manage else {})}
+        res = await engine.open_position(body.symbol, sig, settings.model_copy(update={"risk_per_trade": body.risk_pct}), None, **extra)
         pos, reason = res if isinstance(res, tuple) else (res, getattr(engine, "_open_fail", None))
         if not pos:
             raise HTTPException(400, f"No se abrió: {reason or 'apertura cancelada'}")

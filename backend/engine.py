@@ -9,7 +9,7 @@ from market import MarketData, HTF, TF_SECONDS, candle_scan_loop
 from indicators import build_df, trend_label, htf_trend
 from strategies import evaluate, exit_signal, closed_beyond_exit_ema, atr_params, EXIT_ON_CROSS, EXIT_REASON, CLOSE_EMA_REASON, EMA_TEST, EMA_TEST_TAG, STRATEGY_INFO as FAST_INFO
 from strategies_slow import SLOW_INFO, SLOW_KEYS, evaluate_slow
-from risk import FEE_RATE, MAKER_FEE, SLIPPAGE, position_size, pnl, check_exit, update_trailing, trade_rules, move_in_r, tp_in_r, partial_qty, be_allowed, ema_partial_due, EMA_PARTIAL_PCT
+from risk import FEE_RATE, MAKER_FEE, SLIPPAGE, position_size, pnl, check_exit, update_trailing, trade_rules, pos_rules, move_in_r, tp_in_r, partial_qty, be_allowed, ema_partial_due, EMA_PARTIAL_PCT
 import price_action
 import ai_funnel
 import housekeeping
@@ -261,12 +261,12 @@ class TradingEngine:
             local_syms.add(p.symbol)
             if p.live:
                 if ex is not None:
-                    await self._sync_live_position(p, ex.get(p.symbol), tickers.get(p.symbol), settings, rules)
+                    await self._sync_live_position(p, ex.get(p.symbol), tickers.get(p.symbol), settings, pos_rules(rules, p))
                 continue
             t = tickers.get(p.symbol)
             if not t:
                 continue
-            await self._manage_paper_position(p, t["price"], rules)
+            await self._manage_paper_position(p, t["price"], pos_rules(rules, p))
         if ex:
             for sym in set(ex) - local_syms - self._external_warned:
                 self._external_warned.add(sym)
@@ -274,7 +274,7 @@ class TradingEngine:
         await monitor_shadows(self, tickers, rules)
         await maker.monitor_pending(self, tickers)
         await self._update_account_metrics(settings)
-        if position_review.due(self, settings):
+        if position_review.due(self, settings) or await position_review.manual_due(self, settings):
             await position_review.review_open_positions(self, settings, "USDT", "Bybit")
         elif shock := await position_review.btc_shock(self, settings):
             await position_review.review_open_positions(self, settings, "USDT", "Bybit", trigger=shock)
@@ -559,7 +559,7 @@ class TradingEngine:
                                f"ATR {sig['atr']:.6g}" + (f" · SL {k[0]:g}×ATR · TP {k[1]:g}×ATR" if k else "") + f" · entrada {entry:.6g} · SL {sl:.6g} · TP {tp:.6g}")
 
     async def open_position(self, symbol: str, sig: dict, settings: Settings, signal_id: str, risk_factor: float = 1.0, risk_reason: str = "noticias",
-                            horizon: str = "short", entry_type: str = "market", fill: dict = None, exit_mode: str = None):
+                            horizon: str = "short", entry_type: str = "market", fill: dict = None, exit_mode: str = None, manage: dict = None):
         """`fill` = an already executed maker order ({entry, qty, fee, order_id, link_id} in REAL; {entry} in PAPER): no new order is sent.
         `exit_mode="cross"` (Test cruce EMA): the SL/TP are virtual (sizing only), nothing is sent to Bybit and the position doesn't use a slot."""
         risk_factor = 1.0  # fixed-fractional risk: no filter may shrink the size
@@ -608,7 +608,7 @@ class TradingEngine:
                 pos = Position(symbol=symbol, side=sig["side"], strategy=sig["strategy"], entry_price=entry, qty=qty, initial_qty=qty,
                                leverage=settings.leverage, margin=margin, sl=sl, tp=tp, initial_sl=sl, atr=sig["atr"],
                                fees=fee, mark_price=price, signal_id=signal_id, live=True, order_id=r["order_id"], link_id=r["link_id"],
-                               horizon=horizon, entry_type=entry_type, exit_mode=exit_mode)
+                               horizon=horizon, entry_type=entry_type, exit_mode=exit_mode, manage=manage)
                 res = await self.db.positions.insert_one(pos.to_mongo())
                 pos.id = str(res.inserted_id)
                 if not r["filled"]:
@@ -624,7 +624,7 @@ class TradingEngine:
                 fee = entry * qty * fee_rate
                 pos = Position(symbol=symbol, side=sig["side"], strategy=sig["strategy"], entry_price=entry, qty=qty, initial_qty=qty,
                                leverage=settings.leverage, margin=margin, sl=sl, tp=tp, initial_sl=sl, atr=sig["atr"],
-                               fees=fee, mark_price=price, signal_id=signal_id, horizon=horizon, entry_type=entry_type, exit_mode=exit_mode)
+                               fees=fee, mark_price=price, signal_id=signal_id, horizon=horizon, entry_type=entry_type, exit_mode=exit_mode, manage=manage)
                 res = await self.db.positions.insert_one(pos.to_mongo())
                 pos.id = str(res.inserted_id)
                 await self.db.account.update_one({"_id": "main"}, {"$inc": {"balance": -fee}})

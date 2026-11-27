@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Annotated, Optional, List, Dict, Any
+from typing import Annotated, Optional, List, Dict, Any, Union
 from bson import ObjectId
 from pydantic import BaseModel, BeforeValidator, Field, ConfigDict, field_validator, model_validator
 from fx.symbols import SPECS as FX_SPECS
@@ -301,6 +301,7 @@ class Position(BaseDocument):
     partial_gross: float = 0.0
     partial_fees: float = 0.0
     ai_review: Optional[Dict[str, Any]] = None
+    manage: Optional[Dict[str, Any]] = None  # per-operation overrides of the exit rules (manual orders)
     opened_at: str = Field(default_factory=now_iso)
 
 
@@ -404,6 +405,34 @@ class ManualOrder(BaseModel):
     tp: Optional[float] = Field(default=None, gt=0)  # omitted on EMA-only bots: the trade leaves on the opposite EMA cross
     atr: float = Field(gt=0)
     risk_pct: float = Field(ge=0.1, le=5)
+    manage: Optional[Union["ManualManage", "ManualManageEma"]] = None
+
+
+class ManualManage(BaseModel):
+    breakeven_enabled: bool
+    be_start_r: float = Field(ge=0.5, le=3.0)
+    trailing_enabled: bool
+    trail_start_r: float = Field(ge=0.5, le=3.0)
+    trail_atr_mult: float = Field(ge=0.5, le=3.0)
+    partial_tp_enabled: bool
+    partial_tp_r: float = Field(ge=0.5, le=3.0)
+    partial_tp_pct: int = Field(ge=25, le=75)
+    ai_review: bool
+
+
+class ManualManageEma(BaseModel):
+    """Pepperstone (exit on the opposite EMA cross): its own ATR-based exits."""
+    ema_be_on: bool
+    ema_be_atr: float = Field(ge=0.1, le=10)
+    ema_trail_on: bool
+    ema_trail_atr: float = Field(ge=0.1, le=10)
+    ema_partial_on: bool
+    ema_partial_at_atr: float = Field(ge=0.1, le=10)
+    ema_partial_pct: float = Field(ge=10, le=90)
+    ai_review: bool
+
+
+ManualOrder.model_rebuild()
 
 
 class PlanRequest(BaseModel):
