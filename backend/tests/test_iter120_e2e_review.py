@@ -1,7 +1,7 @@
 """E2E review test for iter120 MT bridge - runs against preview backend."""
 import os, time, requests, pytest
 
-BASE = os.environ.get("REACT_APP_BACKEND_URL", "https://repo-workspace-14--8ursakdp.preview.emergentagent.com").rstrip("/")
+BASE = os.environ.get("REACT_APP_BACKEND_URL", "https://nuevos-cambios--3iqk9tyy.preview.emergentagent.com").rstrip("/")
 PASSWORD = "BlackCat2233@"
 BRIDGE_URL = "http://127.0.0.1:8765"
 BRIDGE_TOKEN = "preview-fake-bridge-token-0123456789"
