@@ -159,7 +159,7 @@ def add_shared_routes(router, engine, label: str, currency: str = "USDT", before
 
     @router.post("/manual-order")
     async def manual_order(body: ManualOrder):
-        """Manual market order from the chart: SL/TP chosen by the user, size by fixed-fractional risk. Bypasses AI, rules and filters; risk limits still apply."""
+        """Manual market order from the chart: SL/TP chosen by the user, size by fixed-fractional risk. Bypasses AI, rules, filters, the one-position-per-pair rule and «Máx. posiciones»; the daily loss limit still applies."""
         settings = await engine.get_settings()
         price = ((getattr(engine, "tickers", None) or engine.market.tickers).get(body.symbol) or {}).get("price")
         if not price:

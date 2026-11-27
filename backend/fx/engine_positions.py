@@ -349,11 +349,12 @@ class PositionsMixin:
         `exit_mode="cross"` (Test cruce EMA): only the 3×ATR safety SL is sent (no TP), the position uses no slot and closes on the opposite cross."""
         risk_pct = settings.risk_per_trade * risk_factor
         cross = exit_mode == "cross"
+        manual = sig["strategy"] == "manual"   # manual orders: no one-position-per-pair rule and no «Máx. posiciones» cap (each one is its own ticket)
         tickers = self._prices()
         async with self.lock:
             open_docs = await self.db.positions.find({}, {"symbol": 1, "side": 1, "horizon": 1, "exit_mode": 1}).to_list(100)
-            slot = None if cross else self._slot_block(open_docs, settings, horizon)
-            if self._pair_taken(open_docs, symbol, cross) or slot:
+            slot = None if cross or manual else self._slot_block(open_docs, settings, horizon)
+            if (not manual and self._pair_taken(open_docs, symbol, cross)) or slot:
                 await self.log("RISK", f"{symbol}: apertura cancelada · {slot or 'par ya abierto'}")
                 return None, slot or "par ya abierto"
             price = tickers.get(symbol, {}).get("price") or sig["price"]

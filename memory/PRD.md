@@ -820,3 +820,10 @@ Decisión del usuario: contratendencia = 2:1 como tendencia (sustituye al TP cor
 - funnel: `next_trigger(tf, now, follow)`, `forming_minute(tf, now, follow)`, `schedule(engine, tf, settings)` (registra el cambio de ciclo al guardar), `run` usa el ciclo del bot; cool-down del modelo potente = min(300, intervalo − 30 s).
 - UI: components/bot/settings/FollowUpSettings.jsx dentro de SettingsPanel (visible con temporalidad 1h): «Seguimientos por hora» y «Cada cuántos minutos» con la lista de marcas resultante.
 - Tests: tests/test_iter121_followup_settings.py. Suite 610 passed, 121 skipped (+ los 12 de API bloqueados por entorno). Build del frontend OK; UI sin verificar en navegador (preview sin entorno).
+
+## Implemented (2026-11, iteration 122 · órdenes manuales sin límite por par)
+- `open_position` (engine.py y fx/engine_positions.py): con `sig["strategy"] == "manual"` no se aplica «par ya abierto» ni «Máx. posiciones»; el límite de pérdida diaria sigue en la ruta /manual-order. El embudo IA sigue con una posición por par y con su tope (las manuales abiertas sí ocupan hueco para la IA).
+- Paper (los 3 bots) y REAL en HotForex / Pepperstone: cada manual es una posición/ticket aparte, en cualquier dirección.
+- Bybit REAL (modo one-way, un SL/TP por par): `TradingEngine._add_to_live` suma la orden a la posición existente solo en la misma dirección (qty, entrada media, fees, margen; SL/TP nuevos para toda la posición, breakeven se reinicia); dirección contraria o posición del test cruce EMA → rechazo con aviso, sin enviar nada.
+- UI: texto del ManualOrderDialog actualizado (`trade.merge` en App.js para el aviso de Bybit REAL).
+- Tests: tests/test_iter122_manual_same_pair.py (Mongo local, se omite si no hay). Suite 621 passed, 121 skipped (+ los 12 de API bloqueados por entorno). Sin probar contra exchange/bróker real.

@@ -591,16 +591,20 @@ class TradingEngine:
         `exit_mode="cross"` (Test cruce EMA): the SL/TP are virtual (sizing only), nothing is sent to Bybit and the position doesn't use a slot."""
         risk_pct = settings.risk_per_trade * risk_factor
         cross = exit_mode == "cross"
+        manual = sig["strategy"] == "manual"   # manual orders: no one-position-per-pair rule and no «Máx. posiciones» cap
         async with self.lock:
             open_docs = await self._open_and_pending(exclude_symbol=symbol)
-            slot = None if cross else self._slot_block(open_docs, settings, horizon)
+            slot = None if cross or manual else self._slot_block(open_docs, settings, horizon)
             # a REAL maker fill is already a live position: it must be recorded even if the cap was reached meanwhile
-            if symbol in [p["symbol"] for p in open_docs if not p.get("pending")] or (slot and not (fill and self.live)):
+            if (not manual and symbol in [p["symbol"] for p in open_docs if not p.get("pending")]) or (slot and not (fill and self.live)):
                 await self.log("RISK", f"{symbol}: apertura cancelada · {slot or 'par ya abierto'}")
                 self._open_fail = slot or "par ya abierto"
                 return None
             price = self.market.tickers.get(symbol, {}).get("price") or sig["price"]
             long = sig["side"] == "long"
+            held = await self.db.positions.find_one({"symbol": symbol, "live": True}) if manual and self.live else None
+            if held:   # Bybit keeps ONE position per pair (one-way mode, a single SL/TP): the manual order is added to it
+                return await self._add_to_live(Position.from_mongo(held), sig, settings, risk_pct, price)
             maker_fill = bool(fill) and entry_type == "maker"
             entry = fill["entry"] if maker_fill else (price * (1 + SLIPPAGE) if long else price * (1 - SLIPPAGE))
             sl = entry - (sig["price"] - sig["sl"])
@@ -668,6 +672,48 @@ class TradingEngine:
         await self.tg(f"{'🟢' if long else '🔴'} <b>ABIERTA {tag}{sig['side'].upper()} {symbol}</b> @ {entry:.6g}{lp}\n"
                  f"Cantidad {qty:.6g} · {settings.leverage}x · margen ${margin:,.2f}\n{levels}\n"
                  f"Estrategia: {STRATEGY_INFO.get(sig['strategy'], {}).get('name', sig['strategy'])}{reduced}{how}", "orders")
+        return pos
+
+    async def _add_to_live(self, p: Position, sig: dict, settings: Settings, risk_pct: float, price: float):
+        """REAL manual order on a pair that already has a position: same side only, the size is added and the SL/TP of the new order replace the old ones."""
+        symbol, long = p.symbol, sig["side"] == "long"
+        why = ("Bybit mantiene una sola posición por par: una orden contraria reduciría o cerraría la posición abierta · ciérrala antes" if p.side != sig["side"]
+               else "la posición abierta es del test cruce EMA (sin TP) y no admite ampliaciones" if p.exit_mode == "cross"
+               else "modo REAL sin credenciales de Bybit" if not self.broker else "Bybit sin respuesta" if self.bybit["down_since"] else None)
+        if why:
+            await self.log("RISK", f"{symbol}: orden manual no enviada · {why}")
+            self._open_fail = why
+            return None
+        entry = price * (1 + SLIPPAGE) if long else price * (1 - SLIPPAGE)
+        sl, tp = entry - (sig["price"] - sig["sl"]), entry + (sig["tp"] - sig["price"])
+        try:
+            size = await self.live_size(symbol, entry, sl, risk_pct, settings.leverage)
+            if not size:
+                return None
+            await self._log_sizing(symbol, sig, size["qty"], size["equity"], risk_pct, entry, sl, tp)
+            r = await self.broker.open(symbol, sig["side"], size["qty"], sl, tp, settings.leverage)
+        except Exception as e:
+            await self.log("ERROR", f"{symbol}: orden REAL rechazada por Bybit · {str(e)[:160]}")
+            await self.tg(f"⚠️ <b>Orden REAL rechazada · {symbol}</b>\n{str(e)[:300]}", "orders")
+            self._open_fail = f"orden REAL rechazada: {str(e)[:120]}"
+            return None
+        try:   # the order already carries SL/TP; this makes sure they rule the whole position
+            await self.broker.set_stop(symbol, sl, tp)
+        except Exception as e:
+            if "not modified" not in str(e).lower():
+                await self.log("ERROR", f"{symbol}: no se pudo confirmar el SL/TP de la posición ampliada en Bybit · revísalo · {str(e)[:120]}")
+        add, fill = r["qty"], r["entry"] or entry
+        qty = p.qty + add
+        avg = (p.entry_price * p.qty + fill * add) / qty
+        d = 1 if long else -1
+        upd = {"qty": qty, "initial_qty": (p.initial_qty or p.qty) + add, "entry_price": avg, "margin": qty * avg / settings.leverage, "leverage": settings.leverage, "sl": sl, "tp": tp,
+               "initial_sl": sl if (avg - sl) * d > 0 else p.initial_sl, "breakeven": False, "fees": p.fees + r["fee"], "mark_price": price}
+        await self.db.positions.update_one({"_id": ObjectId(p.id)}, {"$set": upd})
+        pos = p.model_copy(update=upd)
+        await self.log("ORDER", f"AMPLIADA REAL {p.side.upper()} {symbol} · orden manual +{add:.6g} @ {fill:.6g} · posición {qty:.6g} @ {avg:.6g} (media) · "
+                                f"SL {sl:.6g} · TP {tp:.6g} para toda la posición (antes SL {p.sl:.6g} · TP {p.tp:.6g})")
+        await self.tg(f"{'🟢' if long else '🔴'} <b>AMPLIADA REAL {p.side.upper()} {symbol}</b> · orden manual +{add:.6g} @ {fill:.6g}\n"
+                      f"Posición {qty:.6g} @ {avg:.6g} (media)\nSL {sl:.6g} · TP {tp:.6g} para toda la posición", "orders")
         return pos
 
     async def close_position(self, pos_id: str, price: float = None, reason: str = "MANUAL"):

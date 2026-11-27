@@ -54,7 +54,7 @@ export default function ManualOrderDialog({ side, symbol, price, atr, digits, tf
         <DialogHeader>
           <DialogTitle className={long ? "text-emerald-400" : "text-rose-400"}>{long ? "Comprar" : "Vender"} {symbol} · manual</DialogTitle>
           <DialogDescription className="text-slate-400">
-            Orden a mercado a ~{fmtPrice(price, digits)}. ATR(14) en {tf}: {fmtPrice(atr, digits)}. Sin IA, reglas ni filtros; se aplican los límites de riesgo del bot.
+            Orden a mercado a ~{fmtPrice(price, digits)}. ATR(14) en {tf}: {fmtPrice(atr, digits)}. Sin IA, reglas ni filtros. Las órdenes manuales no tienen límite por par ni cuentan para «Máx. posiciones»: puedes abrirla aunque el par ya tenga una operación; el límite de pérdida diaria sí se aplica.{trade.live && trade.merge ? " En Bybit REAL, si el par ya tiene posición la orden se suma a ella (solo en la misma dirección) y este SL/TP pasa a regir toda la posición." : ""}
           </DialogDescription>
         </DialogHeader>
         {trade.live && <p data-testid="manual-order-live-warning" className="rounded-sm border border-rose-500/50 bg-rose-500/10 px-3 py-2 text-[12px] font-semibold text-rose-200">Modo REAL: esta orden se envía al bróker con dinero real.</p>}
