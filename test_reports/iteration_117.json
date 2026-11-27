@@ -1,0 +1,34 @@
+{
+  "summary": "Backend-only review of iter120 1h follow-up scans. Ran full pytest suite (562 passed, 121 skipped, 2 failed + 10 errors — exactly the documented env-blocked HTTP tests, no regressions vs 524+38 baseline). Verified the updated tests/test_iter114_candle_scheduler.py (72 tests: TestNextTrigger, TestSchedule, TestClosedCandles, TestContextHierarchy, TestLiveCandle, TestFollowUpGuards) all pass, plus tests/test_iter119_range_edge_fit.py untouched. Added independent edge-case suite /app/backend/tests/test_iter120_followup_scans.py (38 tests) covering: next_trigger boundaries (exactly at mark, 1s before, midnight UTC roll-over, long idles between :25:05 and next :00:05), forming_minute parity for non-1h timeframes at every boundary (0/5/10/15/20/25/26/59s), live_candle fallback when the exchange has not yet published the forming row (frame ends on last closed candle) or ATR=0, stage-1 fingerprint includes forming minute so every follow-up re-calls stage1 even without price movement, funnel_opened skip keyed by closed candle_ts so the next hour auto re-evaluates, cooldown math (min(DEEP_COOLDOWN_SEC, FOLLOW_UPS[tf][0]-30)=270s inside 1h, 300s for 15m), and Signal.context.funnel.live_candle persisted on follow-up BUY. funnel.py production code was reviewed and NOT modified.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter120_followup_scans.py",
+    "/app/backend/tests/test_iter114_candle_scheduler.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "funnel.next_trigger uses strict `t > now`, so landing exactly at a mark correctly advances to the next one — verified for every 1h mark incl. :25:05 → +1h :00:05.",
+    "forming_minute correctly returns None at HH:00:05 (close scan) because the `every <= sec` check is `300 <= sec`, so sec<300 => None; verified at second-level granularity.",
+    "funnel.live_candle robust against missing forming row and zero ATR; the `run` loop degrades to closed-candle-only metrics gracefully (new regression test added).",
+    "Stage-1 fingerprint `(candle_ts, minute)` ensures the cheap model is called again on every follow-up even with zero price movement — important given the forming candle changed. Verified.",
+    "funnel_opened skip key is the closed candle_ts; because the closed candle_ts rolls to the new hour at HH+1:00:05, the pair is automatically re-evaluated the next hour without any explicit cleanup. Verified.",
+    "Cooldown math `min(DEEP_COOLDOWN_SEC, FOLLOW_UPS[tf][0] - 30)` yields 270s for 1h, so the 5-min-spaced follow-ups are never swallowed. 15m path untouched (300s).",
+    "No off-by-one bugs found. No dead code around FOLLOW_UPS. No issue with midnight UTC roll-over (floor-division on UTC epoch handles it naturally).",
+    "Minor nit (not a bug): `forming_minute` and `live_candle` compute `now // step * step` and `sec // 60` using float math; still safe for the 1h step=3600 case but a future `30m` follow-up configuration would need revisiting the `every * count + 60` upper bound (currently 300*5+60=1560 > 1800/2, would overlap). Not in scope now."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter120_followup_scans.py (new)"
+  ],
+  "success_rate": {"backend": "100% (562/562 of non-env-blocked tests pass; the 2 failed + 10 errored are pre-existing HTTP API tests needing live backend/.env, flagged as environment-blocked by the main agent and matching the documented baseline exactly)", "frontend": "n/a (backend-only review)"},
+  "test_credentials": "n/a",
+  "seed_data_creation": "none",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Full suite baseline is now 562 passed + 121 skipped + 2 failed + 10 errors. The failures/errors are entirely tests/test_iter100_guard_funnel.py::TestGuardAPI::test_guard_requires_auth, tests/test_iter115_manual_order_api.py, tests/test_iter116_levels_and_rules.py, tests/test_iter117_single_ai_review.py — ALL blocked by missing /app/backend/.env and /app/frontend/.env (localhost:8001 not reachable). Not related to any funnel change. iter120 test file (test_iter120_followup_scans.py) is independent of iter114 and should be preserved for future regressions. Run with: cd /app/backend && MONGO_URL=mongodb://localhost:27017 DB_NAME=pytest_tmp JWT_SECRET=pytest-only INITIAL_PASSWORD=pytest-only python -m pytest tests -q -p no:cacheprovider",
+  "rca of the issue": "No bugs found. Implementation of 1h follow-up scans in funnel.py (FOLLOW_UPS, next_trigger, forming_minute, live_candle, _live_txt, schedule, run with funnel_opened guard and 270s cooldown) is correct and complete. All edge cases pass, including midnight UTC roll-over, exact-mark boundaries, missing forming row, and stage-1 fingerprint refresh per follow-up."
+}

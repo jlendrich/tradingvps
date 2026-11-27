@@ -808,3 +808,9 @@ Decisión del usuario: contratendencia = 2:1 como tendencia (sustituye al TP cor
 - funnel.py es compartido: aplica igual a HotForex, Pepperstone y Bybit.
 - Tests: tests/test_iter119_range_edge_fit.py (32), conftest e iter107 actualizados. Suite: 485 passed, 121 skipped; 2 failed + 10 errors son tests de API que necesitan el backend del preview (sin MONGO_URL / frontend/.env en el pod en ese momento), no lógica del embudo.
 - Pendiente: un stop de la IA fuera de 0.65–1.05 ATR en rango cae al stop fijo por ATR (comportamiento heredado) y normalmente no cabrá en el rango.
+
+## Implemented (2026-11, iteration 120 · escaneos de seguimiento en 1h)
+- funnel.py: `FOLLOW_UPS = {"1h": (300, 5)}` → `next_trigger("1h")` da :00:05, :05:05, :10:05, :15:05, :20:05, :25:05 y luego el :00:05 siguiente; el resto de temporalidades (15m incluido) solo al cierre de vela. `forming_minute`, `live_candle`, `_live_txt`.
+- Cierre (:00:05): solo velas cerradas. Seguimientos (:05–:25): indicadores de velas cerradas + `m["live"]` = «vela 1h en curso (minuto X/60)» (apertura, máximo/mínimo, precio actual, mechas en ATR, RSI en vivo) en la tabla del modelo rápido, bloque «VELA EN CURSO» del modelo potente, `engine.analysis[symbol]["live_candle"]` y `context.funnel.live_candle` de la señal. Si el exchange/bróker no entrega la vela en formación, el escaneo usa solo velas cerradas.
+- En 1h: cada seguimiento vuelve a preguntar al modelo rápido, cool-down del modelo potente 270 s (15m sigue en 300 s), y un par con operación abierta en esa hora (`engine.funnel_opened`, en memoria) no se re-evalúa hasta el siguiente cierre; el máximo de posiciones ya pausaba el embudo.
+- Tests: test_iter114_candle_scheduler.py actualizado + test_iter120_followup_scans.py (testing agent, iteration_117.json). Suite: 562 passed, 121 skipped; mismos 2 failed + 10 errors de API por falta de entorno en el preview.
