@@ -4,6 +4,7 @@ import time
 import asyncio
 import trade_learning
 import maintenance
+import manual_ops
 from datetime import datetime, timezone
 from bson import ObjectId
 from models import Position, Trade, now_iso
@@ -496,6 +497,8 @@ class PositionsMixin:
                       f"{lots:.2f} lotes · 1:{leverage} · margen {margin:,.2f} {self.ccy}\n{levels}\n"
                       f"Estrategia: {self.strat_name if cross else FX_STRATEGY_INFO.get(sig['strategy'], {}).get('name', sig['strategy'])}{reduced}", "orders")
         return pos, None
+
+    close_partial = manual_ops.fx_close_partial
 
     async def close_position(self, pos_id: str, price: float = None, reason: str = "MANUAL"):
         tickers = self.market.tickers

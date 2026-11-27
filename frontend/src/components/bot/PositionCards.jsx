@@ -3,6 +3,7 @@ import { X, LineChart } from "lucide-react";
 import { SideBadge, Empty } from "./Panel";
 import PositionChartDialog from "./PositionChartDialog";
 import { PositionAiButton } from "./PositionAiButton";
+import { PartialCloseButton } from "./PartialCloseButton";
 import { http, fmtPrice, fmtSignedUsd, fmtUsd, fmtQty, pnlClass, STRATEGY_LABELS, fmtPips, fmtDateTime } from "@/lib/api";
 
 const BTN = "inline-flex items-center gap-1 rounded-sm border px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-wider transition-colors";
@@ -51,6 +52,7 @@ export function PositionCard({ p, onClose, onChart, aiAnalyze = false }) {
           <LineChart className="h-3 w-3" /> Gráfico
         </button>
         {aiAnalyze && <PositionAiButton p={p} />}
+        <PartialCloseButton p={p} />
         <button data-testid={`close-position-${p.id}`} onClick={() => onClose(p.id)} className={`${BTN} border-rose-500/40 text-rose-300 hover:bg-rose-500/15`}>
           <X className="h-3 w-3" /> Cerrar
         </button>

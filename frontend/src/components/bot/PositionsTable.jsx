@@ -1,5 +1,6 @@
 import { X, Sparkles, Loader2, LineChart } from "lucide-react";
 import { PositionAiButton } from "./PositionAiButton";
+import { PartialCloseButton } from "./PartialCloseButton";
 import { useState } from "react";
 import { toast } from "sonner";
 import { SideBadge, Empty } from "./Panel";
@@ -94,6 +95,7 @@ export default function PositionsTable({ positions, onClose, onCloseAll, aiRevie
                       <LineChart className="h-3.5 w-3.5" />
                     </button>
                     {aiReview && <PositionAiButton p={p} compact />}
+                    <PartialCloseButton p={p} compact />
                   </div>
                 </TD>
                 <TD>

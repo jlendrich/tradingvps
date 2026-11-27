@@ -12,6 +12,7 @@ import chart
 import price_action
 import ai_advisor
 import position_review
+import manual_ops
 import ai_rules
 import trade_learning
 from fx.market import market_open as fx_market_open, friday_stage
@@ -58,6 +59,10 @@ from fx.symbols import is_crypto  # noqa: E402
 
 class AnalyzeIn(BaseModel):
     act: bool = False
+
+
+class PartialIn(BaseModel):
+    pct: float = Field(gt=0, lt=100)
 
 
 def add_shared_routes(router, engine, label: str, currency="USDT", before_unit: str = "ms"):
@@ -112,12 +117,18 @@ def add_shared_routes(router, engine, label: str, currency="USDT", before_unit: 
             raise HTTPException(400, f"Niveles inválidos para el precio actual ({price:.6g}): el SL debe quedar {'por debajo' if d > 0 else 'por encima'} y el TP al otro lado")
         if (await engine.account_summary())["daily_paused"]:
             raise HTTPException(400, "Límite de pérdida diaria alcanzado")
-        if not getattr(engine, "profile", None) and engine.live and await engine.db.positions.count_documents({"symbol": body.symbol}):
-            raise HTTPException(400, "En REAL, Bybit agrupa todas las órdenes de un par en una sola posición: no se puede abrir otra operación en un par que ya tiene una abierta")
+        merge = await engine.db.positions.find_one({"symbol": body.symbol}) if not getattr(engine, "profile", None) and engine.live else None
         sig = {"side": body.side, "strategy": "manual", "price": price, "sl": body.sl, "tp": body.tp, "atr": body.atr, "score": 0,
                "reasons": ["Operación manual desde el gráfico"], "indicators": {"atr": body.atr}, "key_ts": int(time.time() * 1000), "tp_mode": "fixed"}
         await engine.log("ORDER", f"{body.symbol}: orden MANUAL {body.side.upper()} · riesgo {body.risk_pct:g}% · SL {body.sl:.6g} · " + ("sin TP, salida en el cruce contrario de EMAs" if cross else f"TP {body.tp:.6g}"))
         engine._open_fail = None
+        if merge:  # REAL Bybit, one-way mode: the order joins the open position (adds, reduces, closes or flips it)
+            try:
+                pos, how = await manual_ops.bybit_merge_live(engine, merge, sig, settings.model_copy(update={"risk_per_trade": body.risk_pct}),
+                                                             body.manage.model_dump() if body.manage else None)
+            except Exception as e:
+                raise HTTPException(400, f"No se abrió: {str(e)[:160]}")
+            return {**(pos.model_dump() if pos else {}), "merged": how}
         extra = {"pair_limit": False, **({"exit_mode": "cross"} if cross else {}), **({"manage": body.manage.model_dump()} if body.manage else {})}
         res = await engine.open_position(body.symbol, sig, settings.model_copy(update={"risk_per_trade": body.risk_pct}), None, **extra)
         pos, reason = res if isinstance(res, tuple) else (res, getattr(engine, "_open_fail", None))
@@ -171,6 +182,21 @@ def add_shared_routes(router, engine, label: str, currency="USDT", before_unit: 
         except Exception as e:
             raise HTTPException(424, f"Error IA: {friendly_error(e)}")
         return {"ok": True, "reviews": reviews, "count": len(reviews)}
+
+    @router.post("/positions/{pos_id}/close-partial")
+    async def position_close_partial(pos_id: str, body: PartialIn):
+        """Manual partial close of an open position (any bot): `pct` % at market, the rest keeps running."""
+        if not ObjectId.is_valid(pos_id):
+            raise HTTPException(404, "Posición no encontrada")
+        try:
+            return await engine.close_partial(pos_id, body.pct)
+        except LookupError as e:
+            raise HTTPException(404, str(e))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except Exception as e:
+            await engine.log("ERROR", f"Cierre parcial fallido · {str(e)[:160]}")
+            raise HTTPException(424, f"El broker rechazó el cierre parcial: {str(e)[:160]}")
 
     @router.post("/positions/{pos_id}/ai-analyze")
     async def position_ai_analyze(pos_id: str, body: AnalyzeIn):

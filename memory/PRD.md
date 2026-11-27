@@ -794,3 +794,8 @@
 - `open_position(pair_limit=False)` (Bybit y FX) desde `POST /manual-order`: se puede abrir otra operación manual en un par que ya tiene posición (Bybit, HotForex, Pepperstone). Se mantienen el máximo de posiciones y la pérdida diaria. Las señales del bot siguen con una posición por par.
 - Excepción: Bybit en REAL (modo one-way agrupa todo en una posición por par) → 400 con explicación.
 - Tested: tests/test_manual_manage.py 9/9 (dos manuales en el mismo par en los 3 bots).
+
+## Implemented (2026-11 · cierre parcial manual + fusión REAL Bybit)
+- `manual_ops.py`: `POST {prefix}/positions/{id}/close-partial {pct 0–100}` en todos los bots (Bybit, Labs, HotForex, Pepperstone): cierra el % a mercado (paper: slippage+comisión/spread al balance; REAL: Bybit `broker.close` reduce-only, MT `close_partial`), el resto conserva SL/TP/gestión; 400 si el lote mínimo no permite dividir. UI: botón tijeras (`PartialCloseButton`, 25/50/75 % o libre, PnL estimado) en la columna «Herram.» y en las tarjetas.
+- REAL Bybit (one-way): orden manual en un par abierto → `bybit_merge_live`: mismo lado = amplía (entrada media, nuevo SL/TP e initial_sl para toda la posición); lado contrario = reduce, cierra o cierra y gira con el exceso (`open_position(qty_override=)`).
+- Tested: tests/test_partial_and_merge.py + test_manual_manage.py 16/16 (fusión con bróker simulado); captura del popover OK.

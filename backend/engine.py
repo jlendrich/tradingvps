@@ -23,6 +23,7 @@ from bybit import BybitClient, BybitError
 from live import LiveBroker
 from shadow import open_shadow, monitor_shadows
 import followup as fu_mod
+import manual_ops
 import evolution
 import funding
 import cashflow
@@ -566,8 +567,9 @@ class TradingEngine:
 
     async def open_position(self, symbol: str, sig: dict, settings: Settings, signal_id: str, risk_factor: float = 1.0, risk_reason: str = "noticias",
                             horizon: str = "short", entry_type: str = "market", fill: dict = None, exit_mode: str = None, manage: dict = None,
-                            pair_limit: bool = True):
+                            pair_limit: bool = True, qty_override: float = None):
         """`pair_limit=False` (manual orders): a pair that already has a position can be opened again.
+        `qty_override` (REAL): exact size, used for the excess when a manual opposite order flips a position.
         `fill` = an already executed maker order ({entry, qty, fee, order_id, link_id} in REAL; {entry} in PAPER): no new order is sent.
         `exit_mode="cross"` (Test cruce EMA): the SL/TP are virtual (sizing only), nothing is sent to Bybit and the position doesn't use a slot."""
         risk_factor = 1.0  # fixed-fractional risk: no filter may shrink the size
@@ -601,7 +603,7 @@ class TradingEngine:
                         self._open_fail = "Bybit sin respuesta"
                         return None
                     try:
-                        size = await self.live_size(symbol, entry, sl, risk_pct, settings.leverage)
+                        size = {"qty": qty_override, "equity": 0} if qty_override else await self.live_size(symbol, entry, sl, risk_pct, settings.leverage)
                         if not size:
                             return None
                         await self._log_sizing(symbol, sig, size["qty"], size["equity"], risk_pct, entry, sl, tp)
@@ -651,6 +653,8 @@ class TradingEngine:
                  f"Cantidad {qty:.6g} · {settings.leverage}x · margen ${margin:,.2f}\n{levels}\n"
                  f"Estrategia: {STRATEGY_INFO.get(sig['strategy'], {}).get('name', sig['strategy'])}{reduced}{how}", "orders")
         return pos
+
+    close_partial = manual_ops.bybit_close_partial
 
     async def close_position(self, pos_id: str, price: float = None, reason: str = "MANUAL"):
         async with self.lock:
