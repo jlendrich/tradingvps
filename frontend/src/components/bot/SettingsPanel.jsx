@@ -20,6 +20,8 @@ const NUMS = [
   { k: "ai_min_confidence", label: "Confianza mínima IA (%)", step: 5, min: 0, max: 100 },
   { k: "min_rr", label: "R:R mínimo (prefiltro)", step: 0.1, min: 0, max: 5, hint: "Etapa 0 gratis: señales de corto plazo con riesgo/beneficio por debajo se descartan antes de llamar a la IA (0 = apagado)" },
   { k: "scan_interval_sec", label: "Intervalo escaneo (seg)", step: 10, min: 30, max: 900 },
+  { k: "followup_scans", label: "Seguimientos tras el cierre (1h)", step: 1, min: 0, max: 11, hint: "Solo en 1h: tras el escaneo del cierre (:00:05) el bot vuelve a revisar las señales no ejecutadas N veces dentro de la misma hora, con la vela 1h en curso en el contexto de la IA. No re-evalúa pares con operación abierta o abierta en esa hora, ni cuando ya alcanzó el máximo de posiciones. 0 = apagado" },
+  { k: "followup_every_min", label: "Cada cuántos minutos", step: 1, min: 1, max: 30, hint: "Minutos entre seguimientos (5 → :05:05, :10:05, :15:05…). Los que caerían después del minuto 59 no se hacen" },
 ];
 const TOGGLES = [
   { k: "ai_enabled", label: "Confirmación con IA", hint: "La IA aprueba o rechaza cada señal" },

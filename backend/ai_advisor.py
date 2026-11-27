@@ -10,6 +10,7 @@ from emergentintegrations.llm.chat import LlmChat, UserMessage, TextDelta, Strea
 from llm_json import parse_llm_json
 import funding
 import price_action
+import followup
 import ai_rules
 
 logger = logging.getLogger("ai")
@@ -383,6 +384,7 @@ def _build_prompt(symbol, timeframe, sig, ctx) -> str:
         f"Cambio 24h: {ctx.get('change_24h', 0):.2f}% | {funding.prompt_line(ctx.get('funding'))}\n"
         f"Últimos cierres (% cambio por vela, más reciente al final): {ctx.get('recent_changes')}\n"
         + price_action.prompt_lines(ctx.get("price_action"))
+        + followup.prompt_line(ctx.get("live_candle"))
         + ai_rules.prompt_lines(ctx.get("learned_rules")) +
         f"Cuenta: {ctx.get('open_positions')} posiciones abiertas, PnL diario {ctx.get('daily_pnl_pct', 0):.2f}%\n"
         + _news_lines(ctx.get("news")) +
@@ -501,7 +503,13 @@ def btc_context_line(rows15: list, symbol: str) -> str:
     return f"{head}Bitcoin {verb} un {c1h:+.2f} % en la última hora ({c30:+.2f} % en los últimos 30 min){' — movimiento fuerte: las altcoins suelen amplificarlo.' if strong else '.'}"
 
 
-async def review_position(p: dict, candles: list, pa: dict, tf: str, currency: str, price: float, market: str = "fx", btc_line: str = "") -> dict:
+LEVELS_RULE = (" Además dispones de la opción AJUSTAR: mover el SL y/o el TP a niveles nuevos (por ejemplo, subir el stop bajo un mínimo reciente o acercar el TP a una resistencia). "
+               "El SL debe quedar del lado de la pérdida respecto al precio actual y el TP del lado de la ganancia; usa null en el que no cambies. "
+               'Con AJUSTAR responde: {"action":"AJUSTAR","confidence":entero 0-100,"reasoning":"...","sl":número|null,"tp":número|null}')
+
+
+async def review_position(p: dict, candles: list, pa: dict, tf: str, currency: str, price: float, market: str = "fx", btc_line: str = "", levels: bool = False) -> dict:
+    """`levels` = on-demand review from the positions table: the AI may also answer AJUSTAR with new SL/TP."""
     long = p["side"] == "long"
     risk = abs(p["entry_price"] - (p.get("initial_sl") or p["sl"])) or 1e-9
     r_now = ((price - p["entry_price"]) if long else (p["entry_price"] - price)) / risk
@@ -514,10 +522,12 @@ async def review_position(p: dict, candles: list, pa: dict, tf: str, currency: s
         f"ÚLTIMAS {len(candles)} VELAS ({tf}, antigua→reciente): {_candles_txt(candles)}\n"
         "¿Qué hacemos con la posición?"
     )
-    system = POSITION_SYSTEM.format(prudence=POSITION_PRUDENCE.get(market, POSITION_PRUDENCE["fx"]))
+    system = POSITION_SYSTEM.format(prudence=POSITION_PRUDENCE.get(market, POSITION_PRUDENCE["fx"])) + (LEVELS_RULE if levels else "")
     data = parse_json(await _ask(_chat(system, "position-review"), prompt), "revisión de posición")
     action = str(data.get("action", "MANTENER")).upper()
-    return {"action": action if action in ("MANTENER", "BREAKEVEN", "CERRAR") else "MANTENER",
+    num = lambda v: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else None  # noqa: E731
+    out_levels = {"sl": num(data.get("sl")), "tp": num(data.get("tp"))} if levels and action == "AJUSTAR" else {}
+    return {"action": action if action in ("MANTENER", "BREAKEVEN", "CERRAR") or (levels and action == "AJUSTAR") else "MANTENER", **out_levels,
             "confidence": int(max(0, min(100, int(data.get("confidence", 0) or 0)))), "reasoning": str(data.get("reasoning", ""))[:500],
             "btc_context": btc_line or None,
             "r_now": round(r_now, 2), "price": price, "model": label(_cfg["model"]), "at": datetime.now(timezone.utc).isoformat()}

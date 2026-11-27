@@ -9,6 +9,7 @@ import ai_advisor
 import price_action
 from notify import notify as tg
 from models import Position
+from fx.symbols import SPECS
 
 logger = logging.getLogger("position_review")
 CANDLES = 60
@@ -157,3 +158,76 @@ async def review_open_positions(engine, settings, currency: str, bot_name: str, 
                      + (f"\n→ Acción: <b>{acted}</b>" if acted else "\n→ Solo aviso (modo manual)" if mode != "auto" else f"\n→ Sin acción: confianza por debajo del mínimo ({min_conf} %)"), "ai")
     await engine.db.ai_reviews.update_one({"_id": "last"}, {"$set": {"at": datetime.now(timezone.utc).isoformat(), "reviews": out, "trigger": trigger or None}}, upsert=True)
     return out
+
+
+async def _set_levels(engine, p: Position, sl, tp, price: float) -> str:
+    """AJUSTAR: new SL/TP proposed by the AI, applied only when each stays on its own side of the current price."""
+    d = 1 if p.side == "long" else -1
+    fx = hasattr(engine, "profile")
+    digits = SPECS[p.symbol]["digits"] if fx and p.symbol in SPECS else None
+    rnd = (lambda v: round(v, digits)) if digits is not None else (lambda v: float(f"{v:.6g}"))  # noqa: E731
+    new_sl = rnd(sl) if sl and (price - sl) * d > 0 else None
+    new_tp = rnd(tp) if tp and (tp - price) * d > 0 and p.exit_mode != "cross" else None
+    if new_sl == p.sl:
+        new_sl = None
+    if new_tp == p.tp:
+        new_tp = None
+    if new_sl is None and new_tp is None:
+        return "niveles propuestos no aplicables (lado incorrecto del precio o sin cambios)"
+    sl_v, tp_v = new_sl or p.sl, new_tp or p.tp
+    if p.live:
+        try:
+            if fx:
+                await engine.broker.set_stop(p.symbol, p.order_id, sl_v, None if p.exit_mode == "cross" else tp_v)
+            else:
+                await engine.broker.set_stop(p.symbol, sl_v, tp_v)
+        except Exception as e:
+            await engine.log("ERROR", f"{p.symbol}: la IA quiso mover SL/TP pero el broker falló · {str(e)[:120]}")
+            return "no aplicado: el broker rechazó el cambio"
+    await engine.db.positions.update_one({"_id": ObjectId(p.id)}, {"$set": {"sl": sl_v, "tp": tp_v}})
+    return " · ".join(x for x in (f"SL {p.sl:.6g} → {sl_v:.6g}" if new_sl else "", f"TP {p.tp:.6g} → {tp_v:.6g}" if new_tp else "") if x)
+
+
+async def analyze_one(engine, settings, pos_id: str, act: bool, currency: str, bot_name: str) -> dict:
+    """On-demand AI analysis of one open position (positions table). `act` = apply the verdict: close, keep, breakeven or move SL/TP."""
+    doc = await engine.db.positions.find_one({"_id": ObjectId(pos_id)})
+    if not doc:
+        raise LookupError("Posición no encontrada (puede que ya se haya cerrado)")
+    p = Position.from_mongo(doc)
+    tf = getattr(settings, "timeframe", "1h")
+    candles = _rows(await engine.market.fetch_klines(p.symbol, tf, CANDLES + 1, cache_sec=30))
+    if len(candles) < 15:
+        raise ValueError("Sin velas suficientes para analizar la posición")
+    price = (engine.market.tickers.get(p.symbol) or {}).get("price") or candles[-1]["close"]
+    crypto = currency == "USDT"
+    btc_line = ""
+    if crypto and not p.symbol.startswith("BTC"):
+        try:
+            btc_line = ai_advisor.btc_context_line(await engine.market.fetch_klines("BTCUSDT", "15m", 6, cache_sec=60), p.symbol)
+        except Exception as e:
+            logger.warning(f"BTC context unavailable: {e}")
+    pa = price_action.facts(candles[:-1], p.side, p.entry_price, p.atr or 0, p.sl, p.tp)
+    review = await ai_advisor.review_position(p.model_dump(), candles[-CANDLES:], pa, tf, currency, price, "crypto" if crypto else "fx", btc_line, levels=True)
+    acted = None
+    if act:
+        action = review["action"]
+        if action == "CERRAR":
+            await engine.close_position(p.id, reason="IA_REVISION")
+            acted = "cerrada"
+        elif action == "BREAKEVEN":
+            acted = "stop a breakeven" if not p.breakeven and await _breakeven(engine, p, price) else "breakeven no aplicable (ya aplicado o precio no a favor)"
+        elif action == "AJUSTAR":
+            acted = await _set_levels(engine, p, review.get("sl"), review.get("tp"), price)
+        else:
+            acted = "se mantiene sin cambios"
+    review.update(acted=acted, mode="manual_act" if act else "manual_opinion")
+    if acted != "cerrada":
+        await engine.db.positions.update_one({"_id": ObjectId(p.id)}, {"$set": {"ai_review": review}})
+    icon = {"MANTENER": "🟢", "BREAKEVEN": "🟡", "CERRAR": "🔴", "AJUSTAR": "🔧"}.get(review["action"], "🟢")
+    levels = " · ".join(f"{k.upper()} {review[k]:.6g}" for k in ("sl", "tp") if review.get(k))
+    await engine.log("AI_REVIEW", f"{p.symbol} {p.side.upper()}: {icon} análisis manual {'(actuar)' if act else '(solo opinión)'} · {review['action']} ({review['confidence']} %)"
+                     + (f" [{levels}]" if levels else "") + f" · {review['reasoning'][:160]}" + (f" → {acted}" if acted else ""))
+    if act and acted:
+        await tg(f"{icon} <b>{bot_name}</b> · análisis IA manual de {p.symbol} {p.side.upper()}\n<b>{review['action']}</b> ({review['confidence']} %) · {review['r_now']:+.2f} R\n"
+                 f"{review['reasoning']}\n→ Acción: <b>{acted}</b>", "ai")
+    return {"id": p.id, "symbol": p.symbol, "side": p.side, "sl_before": p.sl, "tp_before": p.tp, **review}

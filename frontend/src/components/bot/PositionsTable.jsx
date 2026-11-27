@@ -1,4 +1,5 @@
-import { X, Sparkles, Loader2 } from "lucide-react";
+import { X, Sparkles, Loader2, LineChart } from "lucide-react";
+import { PositionAiButton } from "./PositionAiButton";
 import { useState } from "react";
 import { toast } from "sonner";
 import { SideBadge, Empty } from "./Panel";
@@ -74,18 +75,27 @@ export default function PositionsTable({ positions, onClose, onCloseAll, aiRevie
       </div>
       {mobile ? (
         <div data-testid="positions-cards" className="grid gap-3 p-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr))]">
-          {positions.map((p) => <PositionCard key={p.id} p={p} onClose={onClose} onChart={setChart} />)}
+          {positions.map((p) => <PositionCard key={p.id} p={p} onClose={onClose} onChart={setChart} aiAnalyze={aiReview} />)}
         </div>
       ) : (
       <table data-testid="positions-table" className="w-full text-sm">
         <thead className="border-b border-[#1E293B]">
-          <tr><TH>Símbolo</TH><TH>Lado</TH><TH right>Entrada</TH><TH right>Marca</TH><TH right>SL</TH><TH right>TP</TH><TH right>Tamaño</TH><TH right>Margen</TH><TH right>PnL</TH><TH right>Acción</TH></tr>
+          <tr><TH>Herram.</TH><TH>Símbolo</TH><TH>Lado</TH><TH right>Entrada</TH><TH right>Marca</TH><TH right>SL</TH><TH right>TP</TH><TH right>Tamaño</TH><TH right>Margen</TH><TH right>PnL</TH><TH right>Acción</TH></tr>
         </thead>
         <tbody className="num text-[12px]">
           {positions.map((p) => {
             const pct = p.margin ? (p.unrealized_pnl / p.margin) * 100 : 0;
             return (
               <tr key={p.id} data-testid={`position-row-${p.id}`} className={`border-b border-[#1E293B]/60 transition-colors hover:bg-[#111827] ${p.live ? "bg-rose-500/[0.03]" : ""}`}>
+                <TD>
+                  <div className="flex items-center gap-1.5">
+                    <button data-testid={`position-chart-btn-${p.id}`} onClick={() => setChart(p)} title="Abrir el gráfico completo de esta operación"
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-sm border border-sky-500/40 text-sky-300 transition-colors hover:bg-sky-500/15">
+                      <LineChart className="h-3.5 w-3.5" />
+                    </button>
+                    {aiReview && <PositionAiButton p={p} compact />}
+                  </div>
+                </TD>
                 <TD>
                   <p className="font-display text-[13px] font-semibold text-slate-100">{p.symbol}</p>
                   <p className="text-[10px] text-slate-500">

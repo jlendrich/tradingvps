@@ -2,6 +2,7 @@ import { useState } from "react";
 import { X, LineChart } from "lucide-react";
 import { SideBadge, Empty } from "./Panel";
 import PositionChartDialog from "./PositionChartDialog";
+import { PositionAiButton } from "./PositionAiButton";
 import { http, fmtPrice, fmtSignedUsd, fmtUsd, fmtQty, pnlClass, STRATEGY_LABELS, fmtPips, fmtDateTime } from "@/lib/api";
 
 const BTN = "inline-flex items-center gap-1 rounded-sm border px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-wider transition-colors";
@@ -15,7 +16,7 @@ const Field = ({ label, children, testId, className = "text-slate-200" }) => (
 
 const fxBot = () => /\/api\/(fx|pepper)$/.test(http.defaults.baseURL || "");
 
-export function PositionCard({ p, onClose, onChart }) {
+export function PositionCard({ p, onClose, onChart, aiAnalyze = false }) {
   const pct = p.margin ? (p.unrealized_pnl / p.margin) * 100 : 0;
   const cross = p.exit_mode === "cross";
   return (
@@ -49,6 +50,7 @@ export function PositionCard({ p, onClose, onChart }) {
         <button data-testid={`position-chart-btn-${p.id}`} onClick={() => onChart(p)} className={`${BTN} border-sky-500/40 text-sky-300 hover:bg-sky-500/10`}>
           <LineChart className="h-3 w-3" /> Gráfico
         </button>
+        {aiAnalyze && <PositionAiButton p={p} />}
         <button data-testid={`close-position-${p.id}`} onClick={() => onClose(p.id)} className={`${BTN} border-rose-500/40 text-rose-300 hover:bg-rose-500/15`}>
           <X className="h-3 w-3" /> Cerrar
         </button>

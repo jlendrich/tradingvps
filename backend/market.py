@@ -1,4 +1,5 @@
 import time
+import followup
 import asyncio
 import logging
 import httpx
@@ -27,7 +28,7 @@ async def candle_scan_loop(engine):
     """Entry scanner shared by every bot. Normal strategies (and their AI calls) run once per closed candle, CANDLE_DELAY_SEC after the close;
     the «Test cruce EMA» keeps its own fixed cadence, except in engines with `candle_only` (Bybit Labs: one scan per closed candle, `candle_delay` seconds after it). SL/TP/trailing live in the independent monitor loop."""
     await asyncio.sleep(2)
-    tf, due, first = None, 0.0, True
+    tf, due, first, fu_last = None, 0.0, True, 0.0
     while True:
         settings = await engine.get_settings()
         now = time.time()
@@ -38,18 +39,23 @@ async def candle_scan_loop(engine):
         if now >= due:
             due = next_candle_scan(tf, now, delay)
         engine.scan_full = False
+        fu_on = sync and followup.enabled(engine, settings)
+        fu = followup.pending(now, delay, settings, fu_last) if fu_on and not normal else None
+        if fu:
+            fu_last = fu[2]
         test = not only and (not sync or settings.ema_test_enabled or await engine.db.positions.count_documents({"exit_mode": "cross"}) > 0)
-        if normal or test or first:
+        if normal or fu or test or first:
             try:
-                await engine.scan_once(settings, normal)
+                await engine.scan_once(settings, normal, **({"followup": fu[:2]} if fu else {}))
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.exception("scan error")
                 await engine.log("ERROR", f"Error en escaneo: {e}")
         first = False
-        wait = settings.scan_interval_sec if not sync else max(0.5, min(due - time.time(), TEST_SCAN_SEC) if test else due - time.time())
-        engine.next_scan_ts = time.time() + wait if not sync else due
+        nxt = min(due, followup.next_ts(time.time(), delay, settings) or due) if fu_on else due
+        wait = settings.scan_interval_sec if not sync else max(0.5, min(nxt - time.time(), TEST_SCAN_SEC) if test else nxt - time.time())
+        engine.next_scan_ts = time.time() + wait if not sync else nxt
         try:
             await asyncio.wait_for(engine.scan_event.wait(), timeout=wait)
         except asyncio.TimeoutError:

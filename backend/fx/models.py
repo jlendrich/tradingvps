@@ -35,6 +35,8 @@ class FxSettings(BaseModel):
     price_action_max_candles: int = 3
     price_action_swing_atr: float = 1.0
     scan_interval_sec: int = 120
+    followup_scans: int = 5  # 1h only (not in EMA-only bots): extra scans after the close with the live 1h candle
+    followup_every_min: int = 5
     trailing_enabled: bool = True
     breakeven_enabled: bool = True
     htf_filter: bool = True
@@ -237,6 +239,8 @@ class FxSettingsUpdate(BaseModel):
     price_action_max_candles: Optional[int] = Field(default=None, ge=2, le=5)
     price_action_swing_atr: Optional[float] = Field(default=None, ge=0.25, le=3)
     scan_interval_sec: Optional[int] = Field(default=None, ge=30, le=900)
+    followup_scans: Optional[int] = Field(default=None, ge=0, le=11)
+    followup_every_min: Optional[int] = Field(default=None, ge=1, le=30)
     trailing_enabled: Optional[bool] = None
     breakeven_enabled: Optional[bool] = None
     htf_filter: Optional[bool] = None

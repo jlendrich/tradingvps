@@ -4,6 +4,7 @@ import time
 import json
 import asyncio
 import logging
+import followup
 
 from ai_advisor import _chat, _ask, _cfg, parse_json, label, classify, CONFIG_CODES
 
@@ -71,6 +72,7 @@ def _fast_prompt(symbol: str, timeframe: str, sig: dict, ctx: dict) -> str:
         f"Tendencia TF superior ({ctx.get('htf_tf')}): {ctx.get('htf_trend')} | cambio 24h {ctx.get('change_24h', 0):.2f}%\n"
         f"Últimas velas (% por vela): {ctx.get('recent_changes')}\n"
         + (f"Acción del precio: {' '.join(pa.get('summary') or [])}\n" if pa.get("summary") else "")
+        + followup.prompt_line(ctx.get("live_candle"))
         + "¿Pasa el filtro técnico?"
     )
 
@@ -203,6 +205,7 @@ async def rules_check(symbol: str, timeframe: str, sig: dict, ctx: dict, rules: 
         + f"Hora UTC: {time.strftime('%A %H:%M', time.gmtime())} | posiciones abiertas {ctx.get('open_positions')} | PnL del día {ctx.get('daily_pnl_pct')}%\n"
         + (f"Últimas velas (% por vela): {ctx.get('recent_changes')}\n" if ctx.get("recent_changes") else "")
         + (f"Acción del precio: {' '.join(pa.get('summary') or [])} · datos: {json.dumps({k: v for k, v in pa.items() if k != 'summary'})}\n" if pa else "")
+        + followup.prompt_line(ctx.get("live_candle"))
         + f"REGLAS:\n{lines}\n¿Incumple alguna?"
     )
     data = parse_json(await asyncio.wait_for(_ask(chat, prompt), FAST_TIMEOUT_SEC), "filtro de reglas")

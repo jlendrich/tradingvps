@@ -16,6 +16,7 @@ import ai_rules
 import trade_learning
 from fx.market import market_open as fx_market_open, friday_stage
 from models import ManualOrder
+
 import performance
 from auth import hash_password, verify_password, create_token
 from ai_advisor import ping as ai_ping, current as ai_current, friendly_error, key_hint, ORIGIN_LABELS
@@ -53,6 +54,10 @@ class CashFlowRequest(BaseModel):
     note: str = Field(default="", max_length=120)
 
 from fx.symbols import is_crypto  # noqa: E402
+
+
+class AnalyzeIn(BaseModel):
+    act: bool = False
 
 
 def add_shared_routes(router, engine, label: str, currency="USDT", before_unit: str = "ms"):
@@ -164,6 +169,22 @@ def add_shared_routes(router, engine, label: str, currency="USDT", before_unit: 
         except Exception as e:
             raise HTTPException(424, f"Error IA: {friendly_error(e)}")
         return {"ok": True, "reviews": reviews, "count": len(reviews)}
+
+    @router.post("/positions/{pos_id}/ai-analyze")
+    async def position_ai_analyze(pos_id: str, body: AnalyzeIn):
+        """On-demand AI analysis of one open position: only the opinion, or (act=true) apply it: close, keep, breakeven or move SL/TP."""
+        if not ObjectId.is_valid(pos_id):
+            raise HTTPException(404, "Posición no encontrada")
+        settings = await engine.get_settings()
+        bot_name = engine.profile.bot_name if hasattr(engine, "profile") else "Bybit"
+        try:
+            return await position_review.analyze_one(engine, settings, pos_id, body.act, cur(), bot_name)
+        except LookupError as e:
+            raise HTTPException(404, str(e))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except Exception as e:
+            raise HTTPException(424, f"Error IA: {friendly_error(e)}")
 
     @router.get("/trades/{trade_id}/detail")
     async def trade_detail(trade_id: str):

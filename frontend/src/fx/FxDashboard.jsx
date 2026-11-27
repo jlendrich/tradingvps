@@ -75,7 +75,7 @@ const AI_ALL_INTRO = (n) => `Corre el optimizador y el walk-forward en los ${n} 
 const SESSION_CHIPS = (meta) => [{ k: "sessions_allowed", label: "Sesiones para abrir posiciones", emptyLabel: "todas", options: meta?.sessions || [],
   hint: "El bot solo abre nuevas entradas cuando alguna de las sesiones marcadas está abierta (Londres y Nueva York concentran la liquidez). Sin selección opera en todo el horario forex. Las posiciones abiertas se gestionan igual en cualquier sesión. El backtest aplica el mismo filtro." }];
 const fmtLev = (v) => `1:${v}`;
-const EMA_HIDE = ["scan_interval_sec", "ai_enabled", "ai_funnel_enabled", "ai_min_confidence", "min_rr", "breakeven_enabled", "trailing_enabled", "htf_filter"];
+const EMA_HIDE = ["scan_interval_sec", "followup_scans", "followup_every_min", "ai_enabled", "ai_funnel_enabled", "ai_min_confidence", "min_rr", "breakeven_enabled", "trailing_enabled", "htf_filter"];
 const HFM_TOGGLES = EXTRA_TOGGLES.flatMap((t) => (t.k !== "close_before_weekend" ? [t] : [
   { ...t, hint: `${t.hint}. Excepción: las posiciones del Test cruce EMA 9/21 pueden pasar el fin de semana abiertas según las dos reglas siguientes` },
   { k: "weekend_hold_be_only", label: "Fin de semana · solo test EMA con stop en breakeven", hint: "El viernes a las 15:30 NY, una posición del test de cruce solo queda abierta si su stop ya está en la entrada o mejor. Si aún no lo está pero gana al menos 0.5×ATR, el bot mueve el stop a breakeven y la mantiene; si no, la cierra. Apagado: se mantienen todas con su SL original" },

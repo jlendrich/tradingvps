@@ -86,6 +86,8 @@ class Settings(BaseModel):
     auto_prune_pf: float = 0.8
     auto_prune_min_trades: int = 10
     scan_interval_sec: int = 60
+    followup_scans: int = 5  # 1h only: extra scans after the close, every followup_every_min (live 1h candle in the AI context)
+    followup_every_min: int = 5
     trailing_enabled: bool = True
     breakeven_enabled: bool = True
     htf_filter: bool = True
@@ -242,6 +244,8 @@ class SettingsUpdate(BaseModel):
     auto_prune_pf: Optional[float] = Field(default=None, ge=0.3, le=1.5)
     auto_prune_min_trades: Optional[int] = Field(default=None, ge=3, le=100)
     scan_interval_sec: Optional[int] = Field(default=None, ge=30, le=900)
+    followup_scans: Optional[int] = Field(default=None, ge=0, le=11)
+    followup_every_min: Optional[int] = Field(default=None, ge=1, le=30)
     trailing_enabled: Optional[bool] = None
     breakeven_enabled: Optional[bool] = None
     htf_filter: Optional[bool] = None

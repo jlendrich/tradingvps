@@ -22,6 +22,7 @@ import notify as _notify
 from bybit import BybitClient, BybitError
 from live import LiveBroker
 from shadow import open_shadow, monitor_shadows
+import followup as fu_mod
 import evolution
 import funding
 import cashflow
@@ -40,6 +41,11 @@ INITIAL_BALANCE = 500.0
 
 def today() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+
+async def _no_shadow(*a, **k):
+    return None
 
 
 class TradingEngine:
@@ -686,8 +692,17 @@ class TradingEngine:
     async def _scan_loop(self):
         await candle_scan_loop(self)
 
-    async def scan_once(self, settings: Settings, normal: bool = True):
-        """`normal` = candle-close scan (strategies + rules/AI). False = in-between tick: only the exits of positions left from the removed «Test cruce EMA»."""
+    followups = True  # 1h follow-up scans (followup.py); Bybit Labs turns them off with candle_only
+
+    async def scan_once(self, settings: Settings, normal: bool = True, followup: tuple = None):
+        """`normal` = candle-close scan (strategies + rules/AI). False = in-between tick: only the exits of positions left from the removed «Test cruce EMA».
+        `followup` = (k, n): intra-hour follow-up scan k of n · re-checks the closed-candle signals with the live 1h candle in the AI context."""
+        skip = set()
+        if followup:
+            skip = await fu_mod.pairs_to_skip(self, settings)
+            if skip is None:
+                await self.log("SCAN", f"Seguimiento {followup[0]}/{followup[1]} omitido · máximo de posiciones alcanzado ({settings.max_positions})")
+                return
         self.scanning = True
         found = 0
         htf_tf = HTF[settings.timeframe]
@@ -697,7 +712,9 @@ class TradingEngine:
             for symbol in list(dict.fromkeys([*settings.symbols, *open_test])):
                 try:
                     params = settings.symbol_params.get(symbol) or {}
-                    df = build_df(await self.market.fetch_klines(symbol, settings.timeframe, 300, cache_sec=0 if normal else 8), int(params.get("atr_period", 14)))
+                    if followup and symbol in skip and symbol not in open_test:
+                        continue  # position open or already opened in this pair this hour
+                    df = build_df(await self.market.fetch_klines(symbol, settings.timeframe, 300, cache_sec=0 if normal or followup else 8), int(params.get("atr_period", 14)))
                     i = len(df) - 2
                     row = df.iloc[i]
                     htf = None
@@ -717,6 +734,10 @@ class TradingEngine:
                     if sig and self.running and normal:
                         found += 1
                         await self._handle_signal(symbol, sig, settings, df, htf, htf_tf)
+                    elif sig and self.running and followup and symbol not in skip:
+                        found += 1
+                        live = fu_mod.live_candle(df, (self.market.tickers.get(symbol) or {}).get("price"), tf=settings.timeframe)
+                        await self._handle_signal(symbol, sig, settings, df, htf, htf_tf, followup=followup, live=live)
                 except Exception as e:
                     logger.exception(f"scan {symbol}")
                     await self.log("ERROR", f"{symbol}: {e}")
@@ -725,6 +746,8 @@ class TradingEngine:
             self.last_scan = now_iso()
             if self.running and normal:
                 await self.log("SCAN", f"Escaneo {settings.timeframe} completado · {len(settings.symbols)} pares · {found} señales")
+            elif self.running and followup:
+                await self.log("SCAN", f"Seguimiento {followup[0]}/{followup[1]} (vela 1h en curso) · {len(set(settings.symbols) - skip)} pares revisados · {found} señales sin ejecutar re-evaluadas")
         finally:
             self.scanning = False
 
@@ -817,15 +840,18 @@ class TradingEngine:
         except Exception:
             return None
 
-    async def _handle_signal(self, symbol, sig, settings: Settings, df, htf, htf_tf, horizon: str = "short", tf: str = None):
-        """Every detected signal is opened. Only gates: risk limits (one position per pair, slots, daily loss, exchange down) and the learned rules."""
-        key = f"{symbol}:{sig['strategy']}:{sig['side']}:{sig['key_ts']}"
+    async def _handle_signal(self, symbol, sig, settings: Settings, df, htf, htf_tf, horizon: str = "short", tf: str = None, followup: tuple = None, live: dict = None):
+        """Every detected signal is opened. Only gates: risk limits (one position per pair, slots, daily loss, exchange down) and the learned rules.
+        `followup`/`live`: intra-hour re-check of a closed-candle signal with the forming 1h candle (no shadow trades, blocks only logged)."""
+        key = f"{symbol}:{sig['strategy']}:{sig['side']}:{sig['key_ts']}" + (f":seg{followup[0]}" if followup else "")
         if key in self.signal_keys:
             return
         self.signal_keys.add(key)
+        shadow = _no_shadow if followup else open_shadow
+        tag = f" · seguimiento {followup[0]}/{followup[1]} ({live['label']})" if followup else ""
         tf = tf or settings.timeframe
         name = STRATEGY_INFO[sig["strategy"]]["name"]
-        await self.log("SIGNAL", f"{symbol} {sig['side'].upper()} · {name} · {sig['score']} confirmaciones" + (" · largo plazo" if horizon == "long" else ""))
+        await self.log("SIGNAL", f"{symbol} {sig['side'].upper()} · {name} · {sig['score']} confirmaciones" + (" · largo plazo" if horizon == "long" else "") + tag)
         acc = await self.account_summary()
         open_docs = await self._open_and_pending()
         open_syms = [p["symbol"] for p in open_docs]
@@ -847,7 +873,8 @@ class TradingEngine:
                    "price_now": t0.get("price"), "change_24h": t0.get("change_pct"), "funding_rate": t0.get("funding_rate"), "funding_interval_h": t0.get("funding_interval_h", 8),
                    "open_positions": len(open_syms), "max_positions": settings.max_positions, "daily_pnl_pct": acc["daily_pnl_pct"], "equity": acc["equity"],
                    "recent_changes": [round(x, 3) for x in (closes.pct_change().dropna() * 100).tolist()],
-                   "price_action": price_action.from_df(df, sig["side"], sig["price"], sig["indicators"].get("atr", 0), sig["sl"], sig["tp"], upto=len(df) - 1)}
+                   "price_action": price_action.from_df(df, sig["side"], sig["price"], sig["indicators"].get("atr", 0), sig["sl"], sig["tp"], upto=len(df) - 1),
+                   **({"live_candle": live, "scan": f"seguimiento {followup[0]}/{followup[1]}"} if followup else {})}
         guard = horizon == "short" and sig.get("exit_mode") != "cross"
         if guard:
             context["d1_trend"] = price_action.TREND_TXT.get(d1 := await self._d1_trend(symbol), "N/D")
@@ -856,11 +883,14 @@ class TradingEngine:
         signal = Signal(symbol=symbol, side=sig["side"], strategy=sig["strategy"], timeframe=tf,
                         price=sig["price"], sl=sig["sl"], tp=sig["tp"], score=sig["score"], reasons=sig["reasons"],
                         indicators=sig["indicators"], ai_decision="SIN_IA", key=key, context=context)
+        if block and followup:
+            await self.log("FILTER", f"{symbol}: señal {sig['strategy']} {sig['side'].upper()} sigue sin ejecutarse{tag} · {block}")
+            return
         if block:
             await self.log("FILTER" if "entrada tardía" in block else "RISK", f"{symbol}: señal {sig['strategy']} {sig['side'].upper()} {'generada y DESCARTADA' if 'entrada tardía' in block else 'descartada'} · {block}")
             signal.ai_decision, signal.note = "BLOQUEADA", f"Bloqueada por riesgo: {block}"
             res = await self.db.signals.insert_one(signal.to_mongo())
-            await open_shadow(self, str(res.inserted_id), symbol, sig, settings, "BLOQUEADA", acc["equity"], horizon=horizon)
+            await shadow(self, str(res.inserted_id), symbol, sig, settings, "BLOQUEADA", acc["equity"], horizon=horizon)
             return
 
         approve, rule = True, None
@@ -902,7 +932,7 @@ class TradingEngine:
         if late:  # the price ran while the rules were being checked: nothing is sent to the exchange
             await self.log("FILTER", f"{symbol}: señal {sig['strategy']} {sig['side'].upper()} generada y DESCARTADA · {late}")
             await self.db.signals.update_one({"_id": res.inserted_id}, {"$set": {"note": f"No ejecutada: {late}"}})
-            await open_shadow(self, sid, symbol, sig, settings, "NO_EJECUTADA", acc["equity"], horizon=horizon)
+            await shadow(self, sid, symbol, sig, settings, "NO_EJECUTADA", acc["equity"], horizon=horizon)
         elif approve:
             self._open_fail = None
             if settings.entry_order_type == "maker":
@@ -912,6 +942,6 @@ class TradingEngine:
             if not pos:
                 reason = self._open_fail or "apertura cancelada"
                 await self.db.signals.update_one({"_id": res.inserted_id}, {"$set": {"note": f"No ejecutada: {reason}"}})
-                await open_shadow(self, sid, symbol, sig, settings, "NO_EJECUTADA", acc["equity"], horizon=horizon)
+                await shadow(self, sid, symbol, sig, settings, "NO_EJECUTADA", acc["equity"], horizon=horizon)
         else:
-            await open_shadow(self, sid, symbol, sig, settings, "REGLA" if rule else "BLOQUEADA", acc["equity"], horizon=horizon, rule_id=rule["id"] if rule else None)
+            await shadow(self, sid, symbol, sig, settings, "REGLA" if rule else "BLOQUEADA", acc["equity"], horizon=horizon, rule_id=rule["id"] if rule else None)

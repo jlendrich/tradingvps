@@ -22,7 +22,12 @@ import ai_advisor
 from ai_advisor import label as ai_label
 from fx.backtest import build_fx_df
 from fx.shadow import open_shadow
+import followup as fu_mod
 from fx.engine_core import logger, BLOCK_BY, FX_STRATEGY_INFO
+
+
+async def _no_shadow(*a, **k):
+    return None
 
 
 class SignalsMixin:
@@ -35,8 +40,21 @@ class SignalsMixin:
     def _df(klines: list, atr_period: int = 14):
         return build_fx_df(klines, atr_period)
 
-    async def scan_once(self, settings: FxSettings, normal: bool = True):
+    @property
+    def followups(self) -> bool:
+        return not self.profile.ema_only  # Pepperstone (EMA cross only) keeps a single scan per candle
+
+    async def scan_once(self, settings: FxSettings, normal: bool = True, followup: tuple = None):
+        """`followup` = (k, n): intra-hour follow-up scan · re-checks the closed-candle signals with the live 1h candle in the AI context."""
         ema_only, closed = self.profile.ema_only, not market_open()
+        if followup and closed:
+            return
+        skip = set()
+        if followup:
+            skip = await fu_mod.pairs_to_skip(self, settings)
+            if skip is None:
+                await self.log("SCAN", f"Seguimiento {followup[0]}/{followup[1]} omitido · máximo de posiciones alcanzado ({settings.max_positions})")
+                return
         if closed:
             if not self._closed_logged:
                 self._closed_logged = True
@@ -58,7 +76,9 @@ class SignalsMixin:
                     continue
                 try:
                     params = settings.symbol_params.get(symbol) or {}
-                    df = self._df(await self.market.fetch_klines(symbol, settings.timeframe, 300, cache_sec=0 if normal else 60), int(params.get("atr_period", 14)))
+                    if followup and symbol in skip and symbol not in open_test:
+                        continue  # position open or already opened in this pair this hour
+                    df = self._df(await self.market.fetch_klines(symbol, settings.timeframe, 300, cache_sec=0 if normal or followup else 60), int(params.get("atr_period", 14)))
                     i = len(df) - 2
                     row = df.iloc[i]
                     htf = None
@@ -85,6 +105,10 @@ class SignalsMixin:
                     if sig and self.running and normal and not ema_only:
                         found += 1
                         await self._handle_signal(symbol, sig, settings, df, htf, htf_tf)
+                    elif sig and self.running and followup and not ema_only and symbol not in skip:
+                        found += 1
+                        live = fu_mod.live_candle(df, (self.market.tickers.get(symbol) or {}).get("price"), tf=settings.timeframe)
+                        await self._handle_signal(symbol, sig, settings, df, htf, htf_tf, followup=followup, live=live)
                 except Exception as e:
                     logger.exception(f"scan {symbol}")
                     await self.log("ERROR", f"{symbol}: {e}")
@@ -93,6 +117,8 @@ class SignalsMixin:
             self.last_scan = now_iso()
             if self.running and normal:
                 await self.log("SCAN", f"Escaneo {settings.timeframe} completado · {len(settings.symbols)} pares · {found} señales")
+            elif self.running and followup:
+                await self.log("SCAN", f"Seguimiento {followup[0]}/{followup[1]} (vela 1h en curso) · {len(set(settings.symbols) - skip)} pares revisados · {found} señales sin ejecutar re-evaluadas")
         finally:
             self.scanning = False
 
@@ -235,13 +261,15 @@ class SignalsMixin:
         atr = sig.get("atr")
         return price_action.late_entry(sig["side"], sig["price"], price, atr, both_ways=True) or price_action.wide_spread(spread, atr)
 
-    async def _handle_signal(self, symbol, sig, settings: FxSettings, df, htf, htf_tf, horizon: str = "short", tf: str = None):
-        key = f"{symbol}:{sig['strategy']}:{sig['side']}:{sig['key_ts']}"
+    async def _handle_signal(self, symbol, sig, settings: FxSettings, df, htf, htf_tf, horizon: str = "short", tf: str = None, followup: tuple = None, live: dict = None):
+        key = f"{symbol}:{sig['strategy']}:{sig['side']}:{sig['key_ts']}" + (f":seg{followup[0]}" if followup else "")
         if key in self.signal_keys:
             return
         self.signal_keys.add(key)
+        shadow = _no_shadow if followup else open_shadow  # follow-ups never add shadow trades (no double counting)
+        tag = f" · seguimiento {followup[0]}/{followup[1]} ({live['label']})" if followup else ""
         tf = tf or settings.timeframe
-        await self.log("SIGNAL", f"{symbol} {sig['side'].upper()} · {FX_STRATEGY_INFO[sig['strategy']]['name']} · {sig['score']} confirmaciones" + (" · largo plazo" if horizon == "long" else ""))
+        await self.log("SIGNAL", f"{symbol} {sig['side'].upper()} · {FX_STRATEGY_INFO[sig['strategy']]['name']} · {sig['score']} confirmaciones" + (" · largo plazo" if horizon == "long" else "") + tag)
         acc = await self.account_summary()
         block, kind, open_syms = await self._blocks(symbol, settings, acc, sig["side"], horizon)
         rules_only = self.profile.rules_only  # only risk limits + learned rules decide (no news / market / price-action / R:R gates, no AI approval)
@@ -275,15 +303,19 @@ class SignalsMixin:
                    "open_positions": len(open_syms), "max_positions": settings.max_positions, "daily_pnl_pct": acc["daily_pnl_pct"], "equity": acc["equity"],
                    "news_risk": (news_ctx or {}).get("mercado", {}).get("risk") if news_ctx else None, "news_pair": (news_ctx or {}).get("par") if news_ctx else None,
                    "news_size_factor": risk_factor, "ai_enabled": settings.ai_enabled, "ai_min_confidence": settings.ai_min_confidence,
-                   "horizon": horizon, "price_action": pa, "d1_trend": price_action.TREND_TXT.get(d1, "N/D"), **g_ctx}
+                   "horizon": horizon, "price_action": pa, "d1_trend": price_action.TREND_TXT.get(d1, "N/D"), **g_ctx,
+                   **({"live_candle": live, "scan": f"seguimiento {followup[0]}/{followup[1]}"} if followup else {})}
         base = dict(symbol=symbol, side=sig["side"], strategy=sig["strategy"], timeframe=tf, price=sig["price"], sl=sig["sl"], tp=sig["tp"],
                     score=sig["score"], reasons=sig["reasons"], indicators=sig["indicators"], key=key, context=context, horizon=horizon)
+        if block and followup:
+            await self.log("FILTER", f"{symbol}: señal {sig['strategy']} {sig['side'].upper()} sigue sin ejecutarse{tag} · {block}")
+            return
         if block:
             late_kind = "entrada tardía" in block or "spread demasiado abierto" in block
             await self.log("FILTER" if late_kind else "RISK", f"{symbol}: señal {sig['strategy']} {sig['side'].upper()} {'generada y DESCARTADA' if late_kind else 'descartada'} · {block}")
             res = await self.db.signals.insert_one(Signal(**base, ai_decision=kind, note=f"Bloqueada por {BLOCK_BY.get(kind, 'riesgo')}: {block}").to_mongo())
             if kind != "MERCADO":
-                await open_shadow(self, str(res.inserted_id), symbol, sig, settings, kind, acc, risk_factor=risk_factor, note=block)
+                await shadow(self, str(res.inserted_id), symbol, sig, settings, kind, acc, risk_factor=risk_factor, note=block)
             return
         signal = Signal(**base, ai_decision="SIN_IA")
         approve, shadow_kind, rule = True, None, None
@@ -326,7 +358,7 @@ class SignalsMixin:
                 "open_positions": len(open_syms), "daily_pnl_pct": acc["daily_pnl_pct"],
                 "news": news_ctx, "news_weight": settings.ai_news_weight,
                 "horizon": horizon, "vol_regime": g_ctx.get("vol_regime"), "season_bias": g_ctx.get("season_bias"), "usd_regime": g_ctx.get("usd_regime"),
-                "price_action": pa,
+                "price_action": pa, "live_candle": live,
                 "learned_rules": await ai_rules.active(self.db, symbol, sig["side"], sig["strategy"]),
             }
             try:
@@ -370,15 +402,15 @@ class SignalsMixin:
             if late:  # checked again right before the market order: the price / spread may have moved during the rules check
                 await self.log("FILTER", f"{symbol}: señal {sig['strategy']} {sig['side'].upper()} generada y DESCARTADA · {late}")
                 await self.db.signals.update_one({"_id": res.inserted_id}, {"$set": {"note": f"No ejecutada: {late}"}})
-                await open_shadow(self, sid, symbol, sig, settings, "NO_EJECUTADA", acc, signal.ai_confidence, signal.ai_risk, risk_factor, note=late)
+                await shadow(self, sid, symbol, sig, settings, "NO_EJECUTADA", acc, signal.ai_confidence, signal.ai_risk, risk_factor, note=late)
                 return
             risk_reason = ("riesgo de noticias" if news_block or (self.news and self.news.gate(symbol)[1] < 1) else "volatilidad extrema / sesgo estacional") if risk_factor < 1 else ""
             pos, reason = await self.open_position(symbol, sig, settings, sid, risk_factor, risk_reason, expires_at=sig.get("expires_at"), horizon=horizon)
             await self.db.signals.update_one({"_id": res.inserted_id}, {"$set": {"executed": True} if pos else {"note": f"No ejecutada: {reason}"}})
             if not pos:
-                await open_shadow(self, sid, symbol, sig, settings, "NO_EJECUTADA", acc, signal.ai_confidence, signal.ai_risk, risk_factor, note=reason or "")
+                await shadow(self, sid, symbol, sig, settings, "NO_EJECUTADA", acc, signal.ai_confidence, signal.ai_risk, risk_factor, note=reason or "")
         elif shadow_kind:
-            await open_shadow(self, sid, symbol, sig, settings, shadow_kind, acc, signal.ai_confidence, signal.ai_risk, risk_factor, note=signal.note or signal.ai_reasoning,
+            await shadow(self, sid, symbol, sig, settings, shadow_kind, acc, signal.ai_confidence, signal.ai_risk, risk_factor, note=signal.note or signal.ai_reasoning,
                               rule_id=rule["id"] if rule else None)
 
     async def _scan_slow(self, settings: FxSettings) -> int:
