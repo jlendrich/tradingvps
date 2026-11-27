@@ -118,7 +118,7 @@ def _open(h, prefix, symbol):
     return r.json()
 
 
-@pytest.mark.parametrize("prefix,symbol", [("/api", "BTCUSDT"), ("/api/fx", "EURUSD")])
+@pytest.mark.parametrize("prefix,symbol", [("/api", "SOLUSDT"), ("/api/fx", "USDJPY")])
 def test_analyze_opinion_and_act(h, prefix, symbol):
     pos = _open(h, prefix, symbol)
     try:

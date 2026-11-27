@@ -1,0 +1,38 @@
+{
+  "summary": "Tested the 1h follow-up scans (Bybit + HotForex) and the per-position AI analysis buttons from end to end. Backend: 31/31 pytest pass (test_followup_and_analyze, test_manual_manage, new test_followup_api_public over the PUBLIC URL, all with the real LLM). Ran a simulated Bybit follow-up scan (scan_once(followup=(1,5))) against a scratch DB. It behaved as specified: keys end in :seg1, no shadow trades, the pair with an open position is skipped, the same follow-up index is de-duplicated, the whole follow-up is skipped with a log line at max positions, live_candle 'vela 1h en curso (minuto X/60)' plus rejection is in the context and prompt_line, and signals open when approved. Frontend, Bybit and HotForex: the first column of the positions table is 'HERRAM.'. The chart button opens position-chart-dialog, and fullscreen toggles between 1152x894 and 1920x1080 and back. The AI button opens a dialog: Cancel sends 0 requests, Opinion shows 'Solo opinión: no se ha cambiado nada', and Act shows 'Acción aplicada: se mantiene sin cambios'. Each AI call takes about 4 s. The settings fields 'Seguimientos tras el cierre (1h)' and 'Cada cuántos minutos' save and persist after reload (restored to 5/5). Pepperstone: no follow-up fields; positions render as cards with GRÁFICO but no AI button. All test positions were closed and settings were restored.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "followup.pairs_to_skip", "issue": "Ignores pending_entries (queued maker entries). With the default entry_order_type=maker, a pair or slot held by a pending maker order is not skipped up front. _handle_signal still blocks it ('orden límite en espera' / slot block), so nothing is opened twice. The only cost is extra klines fetches and a FILTER log line for every follow-up."},
+      {"endpoint": "engine.scan_once (followup)", "issue": "found += 1 runs before the signal_keys dedupe in _handle_signal. A re-run of the same follow-up index logs 'N señales sin ejecutar re-evaluadas' even though nothing was re-evaluated (cosmetic)."},
+      {"endpoint": "followup.live_candle", "issue": "atr = float(df.iloc[-2]['atr'] or 0): a NaN ATR is truthy, so range_atr becomes nan and the rejection size check is skipped. Only possible with very short history."},
+      {"endpoint": "POST /api/pepper/positions/{id}/ai-analyze", "issue": "Exists through the shared routes even though the Pepperstone UI hides it. Harmless, but it can still be called on the EMA-only bot."},
+      {"endpoint": "position_review.analyze_one act=true BREAKEVEN", "issue": "Unlike the auto review path, there is no guard for exit_mode=='cross' (EMA-test) positions, so manual 'act' can move the stop of a cross trade to breakeven. Check whether this is intended."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Position chart dialog (non-fullscreen)", "issues": ["For about 1 s after opening, the chart area shows a dim, empty canvas while the chart loads. Acceptable; a skeleton or spinner could be added."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_followup_api_public.py", "/app/backend/tests/sim_followup_scan.py", "/app/backend/tests/test_followup_and_analyze.py", "/app/backend/tests/test_manual_manage.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "Optional: include pending_entries in followup.pairs_to_skip (symbols and slot count)",
+    "Optional: count 'found' in follow-ups only when the key is new",
+    "Optional: decide whether manual 'act' BREAKEVEN should be blocked for exit_mode=='cross' positions, as the auto path does"
+  ],
+  "critical_code_review_comments": [
+    "The scheduling is correct. Follow-ups run only when engine.followups and not candle_only and tf=='1h' and followup_scans>0. pending() uses a 240 s window and t>last. The next wake is min(next close, next follow-up). Slots with k*every>=60 are dropped. If asyncio wakes a few ms early, the loop re-sleeps 0.5 s and then fires.",
+    "FxEngine.followups = not ema_only, so Pepperstone is off. LabEngine has candle_only, so both Labs are off. Follow-ups return early when the forex market is closed.",
+    "Follow-up blocks are only logged (no signal doc, no shadow trade). Approved follow-ups go through the same rules/AI/late-entry path. The live candle is injected into ai_funnel (2 prompts) and ai_advisor._build_prompt.",
+    "Test isolation: test_manual_manage and test_followup_and_analyze both opened BTCUSDT on /api in parallel xdist workers. This caused an intermittent 'posición ya abierta' failure (1 in 2 runs). Fixed by switching test_followup_and_analyze to SOLUSDT/USDJPY."
+  ],
+  "updated_files": ["/app/backend/tests/test_followup_and_analyze.py (symbols BTCUSDT/EURUSD -> SOLUSDT/USDJPY to avoid parallel collisions)", "/app/backend/tests/test_followup_api_public.py (new)", "/app/backend/tests/sim_followup_scan.py (new, scratch DB TEST_scratch_followup_sim, drops only that DB)"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "seed_data_creation": "None. Paper manual positions were opened and closed during testing: Bybit BTCUSDT/ETHUSDT/SOLUSDT, HotForex EURUSD/GBPUSD/USDJPY, Pepperstone EURUSD. They remain as closed MANUAL paper trades in the history (no delete endpoint), with PnL of a few cents each. Settings were restored to followup 5/5.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Login: password BlackCat2233@. Run: cd /app/backend && python -m pytest tests/test_followup_and_analyze.py tests/test_manual_manage.py tests/test_followup_api_public.py -q (about 25 s, real LLM). Use different symbols per test file, because tests run in parallel and only one position per pair is allowed. Simulation: python tests/sim_followup_scan.py. The HotForex chart defaults to XAUUSD, and a Buy there fails because the minimum lot is too much risk, so open fx positions through the API (EURUSD). Pepperstone positions are cards without an AI button."
+}

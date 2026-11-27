@@ -214,6 +214,8 @@ async def analyze_one(engine, settings, pos_id: str, act: bool, currency: str, b
         if action == "CERRAR":
             await engine.close_position(p.id, reason="IA_REVISION")
             acted = "cerrada"
+        elif action == "BREAKEVEN" and p.exit_mode == "cross":
+            acted = "breakeven no aplicable (test cruce EMA: solo cierre por cruce o CERRAR)"
         elif action == "BREAKEVEN":
             acted = "stop a breakeven" if not p.breakeven and await _breakeven(engine, p, price) else "breakeven no aplicable (ya aplicado o precio no a favor)"
         elif action == "AJUSTAR":

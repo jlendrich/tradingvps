@@ -33,6 +33,7 @@ def next_ts(now: float, delay: float, settings):
 async def pairs_to_skip(engine, settings):
     """None = «Máx. posiciones» reached (the whole follow-up is skipped); otherwise the pairs with an open position or opened this hour."""
     docs = await engine.db.positions.find({}, {"symbol": 1, "horizon": 1, "exit_mode": 1}).to_list(300)
+    docs += await engine.db.pending_entries.find({}, {"symbol": 1, "horizon": 1}).to_list(100)  # queued maker entries hold the pair and a slot
     slots = [d for d in docs if d.get("exit_mode") != "cross" and d.get("horizon", "short") != "long"]
     if len(slots) >= settings.max_positions:
         return None
@@ -42,7 +43,8 @@ async def pairs_to_skip(engine, settings):
 
 def live_candle(df, price: float = None, now: float = None, tf: str = "1h") -> dict:
     """The forming candle (last row of df) updated with the live price; ATR from the last closed candle."""
-    row, atr = df.iloc[-1], float(df.iloc[-2]["atr"] or 0)
+    row, atr = df.iloc[-1], float(df.iloc[-2]["atr"])
+    atr = atr if atr == atr and atr > 0 else 0.0  # NaN with a short history
     o, h, lo, c = float(row["open"]), float(row["high"]), float(row["low"]), float(price or row["close"])
     h, lo = max(h, c), min(lo, c)
     minute = max(1, min(60, int(((now or time.time()) - int(row["ts"]) / 1000) // 60) + 1))

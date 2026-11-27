@@ -782,3 +782,10 @@
 
 ## Backlog
 - P1: mostrar en la tabla de posiciones un distintivo cuando una operación tiene gestión personalizada (y permitir editarla con la operación abierta).
+
+## Implemented (2026-11 · seguimientos 1h + herramientas por posición)
+- `followup.py`: en 1h (solo Bybit y HotForex; no Pepperstone `ema_only`, no Labs `candle_only`) tras el escaneo del cierre (:00:05) se hacen `followup_scans` (def. 5, 0–11) seguimientos cada `followup_every_min` (def. 5, 1–30) → :05:05…:25:05; luego espera al próximo cierre. `market.candle_scan_loop` programa el despertar = min(próximo cierre, próximo seguimiento); ventana de 240 s.
+- Seguimiento = `scan_once(followup=(k,n))`: re-evalúa las señales de velas cerradas no ejecutadas con `live_candle` («vela 1h en curso (minuto X/60)»: apertura, máx/mín con precio vivo, mechas, rechazo en vivo) en el contexto y en los prompts (`followup.prompt_line` en rules_check, filtro rápido y evaluación completa). Omite el seguimiento entero con máx. posiciones; omite pares con posición/orden maker en espera o con operación abierta en esa hora. Clave de señal `:seg{k}`, sin operaciones sombra, bloqueos solo se registran.
+- Ajustes Bybit/HotForex: «Seguimientos tras el cierre (1h)» y «Cada cuántos minutos» (ocultos en Pepperstone y Labs).
+- Posiciones (tabla, columna «Herram.» a la izquierda): botón de gráfico completo (`PositionChartDialog`, pantalla completa) y botón IA (`PositionAiButton`) con confirmación: «Solo opinión» o «Que la IA actúe». `POST {prefix}/positions/{id}/ai-analyze {act}` → `position_review.analyze_one`: MANTENER / BREAKEVEN / CERRAR / AJUSTAR (nuevo SL/TP validado por lado del precio; en REAL vía bróker: Bybit `set_stop(sl, tp)`, HFM `set_stop(sym, id, sl, tp)`).
+- Tested iteration_107: backend 31/31 (incl. scan de seguimiento simulado), frontend OK en Bybit/HotForex/Pepperstone. Menores corregidos tras el informe (pending_entries en pares a omitir, ATR NaN, breakeven en posiciones de cruce).
