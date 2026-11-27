@@ -79,7 +79,7 @@ class TestRangeEdge:
         assert "oportunidad_rango" not in funnel._row_txt("X", {**m, "range_edge": None})
 
     def test_prompts_mention_range(self):
-        assert "EXTREMO_OFERTA / EXTREMO_DEMANDA" in funnel.DEEP_SYSTEM and "0.2 ATR antes de la zona opuesta" in funnel.DEEP_SYSTEM
+        assert "EXTREMO_OFERTA / EXTREMO_DEMANDA" in funnel.DEEP_SYSTEM and "antes de la zona opuesta del rango" in funnel.DEEP_SYSTEM
         assert "oportunidad_rango" in funnel.RANGE_FAST_SYSTEM
 
 

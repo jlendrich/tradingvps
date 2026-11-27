@@ -38,6 +38,8 @@ TREND_RR, RANGE_RR = 2.0, 1.0   # exact reward:risk of every trade: trend / brea
 RR_FREE_4H, RR_FREE_ENTRY, RANGE_ROOM_GAP_ATR = 0.75, 0.50, 0.2   # trend: no 4H zone before 75 % of the way to the target, no entry-timeframe micro-zone before 50 % · range: target 0.2 ATR short of the opposite edge
 PULLBACK_ZONE_ATR = 0.5   # orderly pullback: the price must be testing the EMA20 or EMA50 of the entry timeframe within this distance
 RANGE_SIDE = {"EXTREMO_OFERTA": "short", "EXTREMO_DEMANDA": "long"}
+# range-edge trades only (EXTREMO_OFERTA / EXTREMO_DEMANDA, 1:1): tighter AI stop 0.65–1.05 ATR + 0.15 ATR buffer (final 0.80–1.20 ATR), target 0.05 ATR short of the opposite edge, entry on the touch candle
+RANGE_SL_ATR_BAND, RANGE_SL_BUFFER_ATR, RANGE_EDGE_GAP_ATR, RANGE_TOUCH_ATR = (0.65, 1.05), 0.15, 0.05, 0.15
 
 
 def next_trigger(tf: str = "15m", now: float = None) -> float:
@@ -239,9 +241,10 @@ def overext_discard(m: dict, trend_4h: str = None) -> str | None:
     return None
 
 
-def _in_band(risk: float, atr: float) -> bool:
-    """AI stop distance inside SL_ATR_BAND (inclusive; tolerant to float rounding at the edges)."""
-    return SL_ATR_BAND[0] * atr - 1e-6 * atr <= risk <= SL_ATR_BAND[1] * atr + 1e-6 * atr
+def _in_band(risk: float, atr: float, band: tuple = None) -> bool:
+    """AI stop distance inside `band` (SL_ATR_BAND by default; inclusive, tolerant to float rounding at the edges)."""
+    lo, hi = band or SL_ATR_BAND
+    return lo * atr - 1e-6 * atr <= risk <= hi * atr + 1e-6 * atr
 
 
 def levels(side: str, price: float, atr: float, settings, ai_sl=None, ai_tp=None, digits: int = None, buffer_atr: float = 0.0) -> tuple:
@@ -258,16 +261,16 @@ def levels(side: str, price: float, atr: float, settings, ai_sl=None, ai_tp=None
     return sl, tp, source
 
 
-def stop_level(side: str, price: float, atr: float, settings, ai_sl=None, digits: int = None, buffer_atr: float = 0.0) -> tuple:
-    """(sl, source). Fixed toggle ON → sl_mult×ATR. OFF → the AI's stop when sane (0.85–4 ATR) pushed `buffer_atr` further away, otherwise the ATR stop."""
+def stop_level(side: str, price: float, atr: float, settings, ai_sl=None, digits: int = None, buffer_atr: float = 0.0, band: tuple = None) -> tuple:
+    """(sl, source). Fixed toggle ON → sl_mult×ATR. OFF → the AI's stop when sane (inside `band`, 0.85–4 ATR by default) pushed `buffer_atr` further away, otherwise the ATR stop."""
     d = 1 if side == "long" else -1
     sl, source = price - d * settings.atr_sl_mult * atr, "atr"
-    if not settings.atr_levels_enabled and ai_sl and _in_band((price - ai_sl) * d, atr):
+    if not settings.atr_levels_enabled and ai_sl and _in_band((price - ai_sl) * d, atr, band):
         sl, source = float(ai_sl) - d * buffer_atr * atr, "ia"
     return (sl if digits is None else round(sl, digits)), source
 
 
-def rr_block(m: dict, side: str, price: float, dist: float, rr: float, ranging: bool) -> str | None:
+def rr_block(m: dict, side: str, price: float, dist: float, rr: float, ranging: bool, gap_atr: float = RANGE_ROOM_GAP_ATR) -> str | None:
     """Why the exact-R:R target is not reachable: an opposing zone in the way (trend) or not enough room inside the range."""
     d, atr, reward = (1 if side == "long" else -1), m["atr"], rr * dist
     name = "oferta" if side == "long" else "demanda"
@@ -280,9 +283,9 @@ def rr_block(m: dict, side: str, price: float, dist: float, rr: float, ranging: 
         return None if (price - far) * d > 0 else max(0.0, (near - price) * d)   # already beyond the zone: no obstacle
     if ranging:
         free = zone(m)
-        if free is not None and free - RANGE_ROOM_GAP_ATR * atr < reward:
+        if free is not None and free - gap_atr * atr < reward - 1e-9 * atr:
             return (f"falta de recorrido para 1:1 en rango: la {name} opuesta está a {free / atr:.2f} ATR y el objetivo necesita {reward / atr:.2f} ATR "
-                    f"más {RANGE_ROOM_GAP_ATR} ATR de margen")
+                    f"más {gap_atr:g} ATR de margen")
         return None
     for tf, src, pct in ((m.get("tf") or "entrada", m, RR_FREE_ENTRY), ((_tfs(m) or MTF_DEFAULT)[0], (m.get("mtf") or {}).get((_tfs(m) or MTF_DEFAULT)[0]), RR_FREE_4H)):
         free = zone(src)
@@ -395,8 +398,14 @@ DEEP_SYSTEM = (
     "VELA DE FRENO OBLIGATORIA: exige desaceleración o rechazo en la ÚLTIMA vela cerrada de {tf}. PROHIBIDO aprobar una compra (BUY) si esa vela es bajista activa "
     "(cuerpo amplio, cierre cerca del mínimo) sin mecha inferior de absorción; PROHIBIDO aprobar una venta (SELL) si esa vela es alcista activa (cuerpo amplio, cierre "
     "cerca del máximo) sin mecha superior de rechazo. Sin vela de freno o rechazo confirmada, responde PASS. "
+    "Esta regla estricta rige en tendencia, ruptura, contratendencia y retrocesos (objetivo 2:1); la ÚNICA excepción es la ENTRADA EN BORDE DE RANGO descrita a continuación. "
     "Si el par está en régimen RANGO / CHOPPY o marcado como EXTREMO_OFERTA / EXTREMO_DEMANDA (con ADX < 20), busca rechazos en los bordes del rango "
-    "(velas con mecha de rechazo o giro de RSI) con un stop ajustado detrás del borde: el objetivo será 1:1 y debe quedar al menos 0.2 ATR antes de la zona opuesta del rango. No exijas rupturas ni alineación de EMAs de tendencia. "
+    "(velas con mecha de rechazo o giro de RSI) con un stop ajustado detrás del borde: el objetivo será 1:1 y debe quedar antes de la zona opuesta del rango "
+    "(0.05 ATR de margen en EXTREMO_OFERTA / EXTREMO_DEMANDA, 0.2 ATR en el resto de rangos). No exijas rupturas ni alineación de EMAs de tendencia. "
+    "ENTRADA EN BORDE DE RANGO (solo candidatos EXTREMO_OFERTA / EXTREMO_DEMANDA, 1:1): NO esperes una vela adicional de giro ni una segunda vela completa de confirmación. "
+    "Si la ÚLTIMA vela cerrada de {tf} ya tocó o entró en el bloque de oferta/demanda del borde (zona a <= 0.15 ATR) sin perforarlo con el cuerpo completo fuera del rango, "
+    "basta con que deje mecha de rechazo o muestre desaceleración en la zona (RSI >= 58 para vender en oferta, RSI <= 42 para comprar en demanda): decide BUY o SELL en esa misma vela, "
+    "porque en la siguiente el precio ya habrá recorrido medio rango y el 1:1 se pierde. Responde PASS solo si la vela cerró con el cuerpo completo más allá del borde (ruptura del rango). "
     "`confidence` es tu estimación honesta (0-100) de la probabilidad de que la operación alcance el objetivo antes que el stop; no la infles. "
     "{levels} "
     "Si hay REGLAS APRENDIDAS, tienen prioridad: si la operación incumple alguna, responde PASS e indica su número en `rule`. "
@@ -417,6 +426,7 @@ async def stage2(kind: str, symbol: str, tf: str, cand: dict, m: dict, df, i: in
     fixed = settings.atr_levels_enabled
     lv = ((f"El stop es FIJO: SL a {settings.atr_sl_mult:g}×ATR de la entrada; deja sl en null." if fixed else
            f"Propón `sl` como precio: el stop técnico detrás de la estructura (entre {SL_ATR_BAND[0]:g} y {SL_ATR_BAND[1]:g} ATR de la entrada); el sistema le suma un margen de seguridad.")
+          + (f" En esta OPERACIÓN DE RANGO propón un stop ajustado, entre {RANGE_SL_ATR_BAND[0]:g} y {RANGE_SL_ATR_BAND[1]:g} ATR de la entrada (el sistema le suma {RANGE_SL_BUFFER_ATR:g} ATR): un stop más lejano no cabe en el rango." if cand.get("range_edge") and not fixed else "")
           + f" El Take Profit NO lo fijas tú: el sistema lo calcula exactamente a {TREND_RR:g}× la distancia del stop final en tendencia, ruptura o contratendencia, y a "
             f"{RANGE_RR:g}× en operaciones de rango (EXTREMO_OFERTA / EXTREMO_DEMANDA o régimen RANGO / CHOPPY); deja tp en null. Juzga la operación con ese objetivo: "
             "da BUY o SELL solo si ves recorrido libre hasta él; esta regla prevalece sobre cualquier otra indicación de objetivos de este mensaje.")
@@ -425,7 +435,7 @@ async def stage2(kind: str, symbol: str, tf: str, cand: dict, m: dict, df, i: in
     rule_lines = "\n".join(f"{n}. {r['text']}" + (f" (solo {r['symbol']})" if r.get("symbol") else "") for n, r in enumerate(rules, 1))
     prompt = (
         f"PAR: {symbol} | TF {tf} | hora Nueva York {datetime.now(trade_guard.NY).strftime('%A %H:%M')}\n"
-        f"Candidato del filtro rápido: {cand['side'].upper()} · {cand['reason']}" + (f" · OPERACIÓN DE RANGO ({cand['range_edge']}): rechazo en el borde, TP 0.25 ATR antes de la zona opuesta" if cand.get("range_edge") else "") + (f" · CONTRATENDENCIA (contra {hi}): rebote técnico con TP corto" if cand.get("counter_trend") else "") + (f" · RETROCESO ORDENADO a favor de {hi}/{mid}: EMA9/21 cruzada en contra de forma temporal, exige vela de freno en la EMA20/EMA50" if cand.get("pullback") else "") + "\n"
+        f"Candidato del filtro rápido: {cand['side'].upper()} · {cand['reason']}" + (f" · OPERACIÓN DE RANGO ({cand['range_edge']}): rechazo en el borde, TP 1:1 hasta {RANGE_EDGE_GAP_ATR:g} ATR antes de la zona opuesta · no esperes otra vela de giro si la última vela cerrada tocó el borde (<= {RANGE_TOUCH_ATR:g} ATR) y deja mecha de rechazo o desaceleración sin cerrar con cuerpo completo fuera del rango" if cand.get("range_edge") else "") + (f" · CONTRATENDENCIA (contra {hi}): rebote técnico con TP corto" if cand.get("counter_trend") else "") + (f" · RETROCESO ORDENADO a favor de {hi}/{mid}: EMA9/21 cruzada en contra de forma temporal, exige vela de freno en la EMA20/EMA50" if cand.get("pullback") else "") + "\n"
         f"ESTADO ({tf}): {_row_txt(symbol, {**m, 'mtf': None})}\n"
         + (f"ANÁLISIS MULTITEMPORAL ({hi} = estructura, {mid} = confirmación, {tf} = entrada): {_mtf_txt(m)}\n" if m.get("mtf") else
            f"TEMPORALIDAD SUPERIOR ({htf['tf']}): tendencia {htf['trend']} · RSI {htf['rsi']} · ADX {htf['adx']} · precio a {htf['dist_ema50_atr']:+} ATR de su EMA50\n") +
@@ -692,12 +702,13 @@ async def _deep(engine, settings, cand: dict, m: dict, frame: tuple, s1: dict) -
     ranging = bool(edge or m.get("regime"))
     rr = RANGE_RR if ranging else TREND_RR
     dg = engine.funnel_digits(symbol)
-    sl, source = stop_level(side, price, m["atr"], settings, res["sl"], dg, SL_BUFFER_ATR if m.get("rich") else 0.0)
+    buffer = (RANGE_SL_BUFFER_ATR if edge else SL_BUFFER_ATR) if m.get("rich") else 0.0   # range edge: tighter stop band and buffer so the 1:1 fits inside the range
+    sl, source = stop_level(side, price, m["atr"], settings, res["sl"], dg, buffer, RANGE_SL_ATR_BAND if edge else None)
     dist = (price - sl) * d
     tp = price + d * rr * dist   # exact reward:risk from the final stop; the position size still comes from risk_per_trade and that stop
     tp = tp if dg is None else round(tp, dg)
     counter = m.get("bias") not in (None, side)
-    why = rr_block(m, side, price, dist, rr, ranging)
+    why = rr_block(m, side, price, dist, rr, ranging, RANGE_EDGE_GAP_ATR if edge else RANGE_ROOM_GAP_ATR)
     if why:
         why = f"{res['decision']} · PASS por {why}"
         _note(engine, symbol, 2, "PASS", why, res["confidence"])
