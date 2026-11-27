@@ -42,12 +42,44 @@ RANGE_SIDE = {"EXTREMO_OFERTA": "short", "EXTREMO_DEMANDA": "long"}
 RANGE_SL_ATR_BAND, RANGE_SL_BUFFER_ATR, RANGE_EDGE_GAP_ATR, RANGE_TOUCH_ATR = (0.65, 1.05), 0.15, 0.05, 0.15
 
 
+FOLLOW_UPS = {"1h": (300, 5)}   # timeframe → (seconds between follow-up scans, how many) after the close scan: 1h bots re-scan the forming candle at :05 … :25
+
+
 def next_trigger(tf: str = "15m", now: float = None) -> float:
-    """Epoch of the next candle close of `tf` (UTC-aligned) + safety delay."""
+    """Epoch of the next scan of `tf`: its candle close (UTC-aligned) + safety delay, plus the follow-up marks of FOLLOW_UPS inside the new candle."""
     now = time.time() if now is None else now
     step = TF_SECONDS[tf]
-    t = (now - TRIGGER_DELAY_SEC) // step * step + step + TRIGGER_DELAY_SEC
-    return t if t > now else t + step
+    every, count = FOLLOW_UPS.get(tf, (0, 0))
+    base = (now - TRIGGER_DELAY_SEC) // step * step + TRIGGER_DELAY_SEC   # last close scan
+    return next(t for t in (*(base + k * every for k in range(1, count + 1)), base + step) if t > now)
+
+
+def forming_minute(tf: str, now: float = None) -> int | None:
+    """Minute of the forming candle while a follow-up scan of `tf` is due (1h: 5 … 25); None on the close scan and on every other timeframe."""
+    if tf not in FOLLOW_UPS:
+        return None
+    every, count = FOLLOW_UPS[tf]
+    sec = (time.time() if now is None else now) % TF_SECONDS[tf]
+    return int(sec // 60) if every <= sec < every * count + 60 else None
+
+
+def live_candle(df, i: int, tf: str, atr: float, price: float, minute: int, now: float = None) -> dict | None:
+    """The forming candle of `tf` (row after the last closed one) with the live price: open, high / low so far and both wicks in ATR. Never a closed candle."""
+    step, now = TF_SECONDS[tf], time.time() if now is None else now
+    if i + 1 >= len(df) or int(df["ts"].iloc[i + 1]) // 1000 != int(now // step * step) or not atr > 0:
+        return None
+    r = df.iloc[i + 1]
+    o, hi, lo = float(r["open"]), max(float(r["high"]), price), min(float(r["low"]), price)
+    rsi = float(r["rsi"]) if "rsi" in r and r["rsi"] == r["rsi"] else None
+    return {"label": f"vela {tf} en curso (minuto {minute}/{step // 60})", "minute": minute, "of": step // 60, "ts": int(r["ts"]), "open": o, "high": hi, "low": lo, "price": price,
+            "upper_wick_atr": round((hi - max(o, price)) / atr, 2), "lower_wick_atr": round((min(o, price) - lo) / atr, 2), "body_atr": round((price - o) / atr, 2),
+            "rsi": round(rsi, 1) if rsi is not None else None}
+
+
+def _live_txt(lc: dict) -> str:
+    return (f"{lc['label']}, NO cerrada: apertura {lc['open']:.6g} · máximo {lc['high']:.6g} · mínimo {lc['low']:.6g} · precio actual {lc['price']:.6g} · "
+            f"cuerpo {lc['body_atr']:+} ATR · mecha superior {lc['upper_wick_atr']} ATR · mecha inferior {lc['lower_wick_atr']} ATR"
+            + (f" · RSI en vivo {lc['rsi']}" if lc.get("rsi") is not None else ""))
 
 
 async def schedule(engine, tf: str) -> float:
@@ -55,7 +87,10 @@ async def schedule(engine, tf: str) -> float:
     ts = next_trigger(tf)
     if getattr(engine, "scan_tf", None) != tf:
         engine.scan_tf = tf
-        await engine.log("INFO", f"Próximo escaneo al cierre de vela {tf}: {datetime.fromtimestamp(ts, timezone.utc):%H:%M:%S} UTC")
+        every, count = FOLLOW_UPS.get(tf, (0, 0))
+        await engine.log("INFO", (f"Próximo escaneo de seguimiento de la vela {tf} en curso" if forming_minute(tf, ts) is not None else f"Próximo escaneo al cierre de vela {tf}")
+                         + f": {datetime.fromtimestamp(ts, timezone.utc):%H:%M:%S} UTC"
+                         + (f" · cierre de vela + {count} seguimientos cada {every // 60} min (hasta el minuto {every * count // 60})" if count else ""))
     return ts
 
 
@@ -310,6 +345,11 @@ RANGE_FAST_SYSTEM = (
     "Para ese par propón únicamente SHORT si es EXTREMO_OFERTA o LONG si es EXTREMO_DEMANDA, y solo si ves rechazo en el borde; no exijas tendencia, ADX alto ni alineación de EMAs."
 )
 
+LIVE_FAST_SYSTEM = (
+    " VELA EN CURSO: este es un escaneo de seguimiento dentro de la vela. Los indicadores de la tabla son de velas CERRADAS; la línea «vela … en curso (minuto X/N)» es la vela "
+    "que se está formando y NO está cerrada: úsala para ver si el precio está dejando un rechazo en vivo (mecha, doble techo/suelo) en una zona de oferta/demanda."
+)
+
 TURN_FAST_SYSTEM = (
     " GIRO ESTRUCTURAL: si un par tiene giro_estructura_{tf}: GIRO_ALCISTA_CONFIRMADO (aunque 4H y 1H sigan marcando BAJISTA), deja de proponer SHORT y evalúalo como "
     "candidato LONG (contratendencia temprana) si el precio está haciendo un retroceso ordenado hacia la EMA 9/EMA 21 o consolidando en el tercio superior tras la ruptura. "
@@ -347,6 +387,7 @@ def _row_txt(symbol: str, m: dict) -> str:
                + f" | giro_estructura_{m.get('tf', 'tf')}: {m.get('turn') or 'NINGUNO'}"
                + (f" | regimen_{m.get('tf', 'tf')}: {m['regime']} ({m['ema20_crosses']} cruces de EMA20 en {RANGE_BARS} velas): exige extremos claros de oferta/demanda" if m["regime"] else "")
                if m.get("rich") else "")
+            + (f"\n   {_live_txt(m['live'])}" if m.get("live") else "")
             + (f"\n   oportunidad_rango: {m['range_edge']} (mercado lateral: solo {RANGE_SIDE[m['range_edge']].upper()} desde este borde, objetivo antes de la zona opuesta)" if m.get("range_edge") else "")
             + (f"\n   {_mtf_txt(m)}" if m.get("mtf") else ""))
 
@@ -355,6 +396,7 @@ async def stage1(kind: str, tf: str, rows: dict, limit: int, usage_kind: str) ->
     mtf = any(m.get("mtf") for m in rows.values())
     system = _relabel(FAST_SYSTEM.format(market=MARKET[kind], tf=tf, n=limit) + (MTF_SYSTEM.format(tf=tf) if mtf else "")
                       + (RANGE_FAST_SYSTEM if any(m.get("range_edge") for m in rows.values()) else "")
+                      + (LIVE_FAST_SYSTEM if any(m.get("live") for m in rows.values()) else "")
                       + (TURN_FAST_SYSTEM.format(tf=tf) if any(m.get("turn") for m in rows.values()) else ""), next((_tfs(m) for m in rows.values() if m.get("mtf")), None))
     prompt = "\n".join(_row_txt(s, m) for s, m in rows.items()) + f"\n\n¿Qué pares (máx. {limit}) merecen el análisis completo?"
     t0 = time.monotonic()
@@ -443,6 +485,10 @@ async def stage2(kind: str, symbol: str, tf: str, cand: dict, m: dict, df, i: in
         f"CONTEXTO: {json.dumps(ctx, ensure_ascii=False)}\n"
         f"ÚLTIMAS VELAS CERRADAS ({tf}, UTC{', V = ' + ('volumen' if kind == 'crypto' else 'volumen de ticks del bróker') if has_volume else ', sin volumen fiable: usa el rango'}):\n"
         f"{_candles_txt(df, i, 40, has_volume)}\n"
+        + (f"VELA EN CURSO · {_live_txt(m['live'])}\n"
+           "Esta vela NO está cerrada y no cuenta como vela cerrada: los indicadores de ESTADO y la lista anterior son solo de velas cerradas. Úsala para valorar el rechazo en vivo "
+           "(mecha en la zona, doble techo/suelo frente a las velas cerradas); una mecha de rechazo ya clara en la zona vale como señal de freno en curso, pero ten presente "
+           "que el cierre aún puede cambiar.\n" if m.get("live") else "")
         + (f"REGLAS APRENDIDAS:\n{rule_lines}\n" if rules else "")
         + "¿Abres operación ahora?"
     )
@@ -523,6 +569,7 @@ async def run(engine, settings) -> int:
     tfs = engine.funnel_tfs = mtf_of(tf)
     ctx_txt = "/".join(t.upper() for t in tfs)
     rows, frames = {}, {}
+    minute = forming_minute(tf)
     for symbol in settings.symbols:
         try:
             df, has_volume = await engine.funnel_frame(symbol, tf)
@@ -530,11 +577,13 @@ async def run(engine, settings) -> int:
             price = _price(engine, symbol, float(df["close"].iloc[-1]))
             m = metrics(df, i, has_volume, price, getattr(engine, "funnel_rich", False))
             m["tf"], m["range_edge"] = tf, range_edge(m)
+            if minute is not None:   # follow-up scan: the forming candle goes along, labelled, next to the closed-candle metrics
+                m["live"] = live_candle(df, i, tf, m["atr"], price, minute)
             rows[symbol], frames[symbol] = m, (df, i, has_volume)
             prev = engine.analysis.get(symbol, {})
             engine.analysis[symbol] = {**engine.funnel_analysis(symbol, m), "trend": {"MIXTA": "NEUTRAL"}.get(m["trend"], m["trend"]), "rsi": m["rsi"], "macd_hist": m["macd_hist"],
                                        "adx": m["adx"], "activity": m["activity"], "activity_kind": m["activity_kind"], "demand": m["demand"], "supply": m["supply"],
-                                       "signal": None, "signal_strategy": None, "funnel": prev.get("funnel"), "updated_at": now_iso()}
+                                       "signal": None, "signal_strategy": None, "funnel": prev.get("funnel"), "live_candle": m.get("live"), "updated_at": now_iso()}
         except Exception as e:
             logger.exception(f"funnel metrics {symbol}")
             await _say(engine, f"err:{symbol}", "ERROR", f"{symbol}: sin datos para el embudo · {str(e)[:120]}")
@@ -554,6 +603,9 @@ async def run(engine, settings) -> int:
     eligible, dropped = {}, []
     for symbol, m in rows.items():
         if symbol in state["open"]:
+            continue
+        if tf in FOLLOW_UPS and engine.__dict__.get("funnel_opened", {}).get(symbol) == m["candle_ts"]:   # already traded on this candle: no follow-up re-evaluation
+            _note(engine, symbol, 0, "DESCARTADO", f"Ya se abrió una operación en este par durante esta vela de {tf} · sin re-evaluación hasta el próximo cierre")
             continue
         ev = trade_guard.calendar.blocking(kind, symbol)
         if ev:
@@ -589,7 +641,7 @@ async def run(engine, settings) -> int:
         await _say(engine, "stage0", "FILTER", f"Fase 0 (sin IA) · {tf} · {len(dropped)} descartado(s), {len(eligible)} pasan al modelo rápido · " + " | ".join(dropped))
     if not eligible:
         return 0
-    fp = {s: (m["candle_ts"], m["price"]) for s, m in eligible.items()}
+    fp = {s: ((m["candle_ts"], minute), m["price"]) for s, m in eligible.items()}   # a follow-up scan always asks the fast model again: the forming candle changed
     last = engine.funnel_last
     limit = min(MAX_CANDIDATES, state["free"])
     s1 = getattr(engine, "funnel_s1", None)
@@ -645,11 +697,13 @@ async def run(engine, settings) -> int:
         if len(picked) < len(eligible):
             await engine.log("FILTER", f"Fase 1 (modelo rápido) · sin entrada en: {', '.join(s for s in eligible if s not in picked)}")
         await engine.log("SCAN", f"Embudo {ctx_txt + ' → ' if getattr(engine, 'funnel_mtf', None) else ''}{tf} · {len(rows)} pares → {len(eligible)} tras filtro técnico → {len(picked)} candidato(s) del modelo rápido"
+                                 + (f" · seguimiento con vela {tf} en curso (minuto {minute}/{TF_SECONDS[tf] // 60})" if minute is not None else "")
                                  + (f": {', '.join(c['symbol'] + ' ' + c['side'].upper() for c in s1['candidates'])}" if picked else "") + f" · {s1['model']} · {s1['ms']} ms")
     found = 0
     deep_at = engine.__dict__.setdefault("funnel_deep_at", {})
+    cooldown = min(DEEP_COOLDOWN_SEC, FOLLOW_UPS[tf][0] - 30) if tf in FOLLOW_UPS else DEEP_COOLDOWN_SEC   # follow-up scans are 5 min apart: none may be swallowed
     for cand in s1["candidates"][:limit]:
-        if cand["symbol"] not in eligible or time.time() - deep_at.get(cand["symbol"], 0) < DEEP_COOLDOWN_SEC:
+        if cand["symbol"] not in eligible or time.time() - deep_at.get(cand["symbol"], 0) < cooldown:
             continue
         deep_at[cand["symbol"]] = time.time()
         try:
@@ -732,7 +786,7 @@ async def _deep(engine, settings, cand: dict, m: dict, frame: tuple, s1: dict) -
                     ai_model=res["model"], ai_ms=res["ms"], ai_adjusted_sl=res["sl"], ai_adjusted_tp=None, ai_levels_applied=source == "ia",
                     ai_reasoning=res["reasoning"], key=key,
                     context={**ctx, "funnel": {"stage1": {"reason": cand["reason"], "model": s1["model"], "ms": s1["ms"]}, "levels": source, "rr_target": rr, "range_trade": ranging, "counter_trend": counter, "range_edge": edge, "trend": m["trend"],
-                                               "htf_tf": htf_tf, "mtf": {tf: h["trend"] for tf, h in (m.get("mtf") or {}).items()} or None, "activity_kind": m["activity_kind"], "demand": m["demand"], "supply": m["supply"]}})
+                                               "htf_tf": htf_tf, "mtf": {tf: h["trend"] for tf, h in (m.get("mtf") or {}).items()} or None, "activity_kind": m["activity_kind"], "demand": m["demand"], "supply": m["supply"], "live_candle": m.get("live")}})
     sid = str((await engine.db.signals.insert_one(signal.to_mongo())).inserted_id)
     head = f"{symbol} {res['decision']} · confianza {res['confidence']}% (umbral {threshold}%)"
     if not approved:
@@ -762,6 +816,7 @@ async def _deep(engine, settings, cand: dict, m: dict, frame: tuple, s1: dict) -
             return 0
     ok, reason = await engine.funnel_open(symbol, sig, settings, sid, state["acc"])
     if ok:
+        engine.__dict__.setdefault("funnel_opened", {})[symbol] = m["candle_ts"]
         _note(engine, symbol, 2, "EJECUTADA", res["reasoning"], res["confidence"])
     else:
         _note(engine, symbol, 2, "NO_EJECUTADA", reason, res["confidence"])
