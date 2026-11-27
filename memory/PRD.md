@@ -827,3 +827,9 @@ Decisión del usuario: contratendencia = 2:1 como tendencia (sustituye al TP cor
 - Bybit REAL (modo one-way, un SL/TP por par): `TradingEngine._add_to_live` suma la orden a la posición existente solo en la misma dirección (qty, entrada media, fees, margen; SL/TP nuevos para toda la posición, breakeven se reinicia); dirección contraria o posición del test cruce EMA → rechazo con aviso, sin enviar nada.
 - UI: texto del ManualOrderDialog actualizado (`trade.merge` en App.js para el aviso de Bybit REAL).
 - Tests: tests/test_iter122_manual_same_pair.py (Mongo local, se omite si no hay). Suite 621 passed, 121 skipped (+ los 12 de API bloqueados por entorno). Sin probar contra exchange/bróker real.
+
+## Implemented (2026-11, iteration 123 · cierre parcial manual · manuales fuera de «Máx. posiciones»)
+- `partial_close(pos_id, pct)` en TradingEngine y fx PositionsMixin + `POST /positions/{id}/partial-close` ({pct: 5–95}) en shared_routes (los 3 bots, paper y REAL). Cierra a mercado ese % (respeta lote mínimo), acumula partial_gross / partial_fees, no toca SL/TP ni `partial_done` (la regla automática de parcial sigue independiente). MT4 re-ticket contemplado.
+- UI: components/bot/PartialCloseButton.jsx (popover 25 / 50 / 75 %) en PositionsTable y PositionCard; la insignia ½ aparece con cualquier parcial realizado.
+- Las posiciones con strategy "manual" no ocupan hueco: `_slot_block` y `funnel_state` de ambos motores las excluyen. En Bybit REAL una manual sumada a una posición de la IA sigue siendo esa posición (cuenta).
+- Tests: tests/test_iter122_manual_same_pair.py ampliado (23). Sin probar en navegador ni contra bróker real (preview sin entorno).

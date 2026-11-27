@@ -439,6 +439,10 @@ class ManualOrder(TradeRules):
     risk_pct: float = Field(ge=0.1, le=5)
 
 
+class PartialClose(BaseModel):
+    pct: int = Field(ge=5, le=95)   # % of the open size to close now
+
+
 class LevelsUpdate(BaseModel):
     sl: Optional[float] = Field(default=None, gt=0)
     tp: Optional[float] = Field(default=None, gt=0)

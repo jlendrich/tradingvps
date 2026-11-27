@@ -86,8 +86,8 @@ class SignalsMixin:
 
     async def funnel_state(self, settings: FxSettings) -> dict:
         acc = await self.account_summary()
-        docs = await self.db.positions.find({}, {"symbol": 1, "horizon": 1, "exit_mode": 1}).to_list(100)
-        used = len([p for p in docs if (p.get("horizon") or "short") == "short" and p.get("exit_mode") != "cross"])
+        docs = await self.db.positions.find({}, {"symbol": 1, "horizon": 1, "exit_mode": 1, "strategy": 1}).to_list(100)
+        used = len([p for p in docs if (p.get("horizon") or "short") == "short" and p.get("exit_mode") != "cross" and p.get("strategy") != "manual"])
         block = ("límite de pérdida diaria alcanzado" if acc["daily_paused"] else filters.rollover_block(settings.rollover_guard)
                  or (f"cuenta {self.bk} sin conexión con el puente MT" if self.live and self.hfm["down_since"] else None)
                  or ("regla del viernes · sin entradas nuevas desde las 12:00 NY" if settings.close_before_weekend and trade_guard.friday()["block"] else None)
@@ -117,7 +117,7 @@ class SignalsMixin:
                 await self.close_position(str(d["_id"]), None, EXIT_REASON)
 
     async def _blocks(self, symbol: str, settings: FxSettings, acc: dict, side: str = None, horizon: str = "short"):
-        open_docs = await self.db.positions.find({}, {"symbol": 1, "side": 1, "horizon": 1, "exit_mode": 1}).to_list(100)
+        open_docs = await self.db.positions.find({}, {"symbol": 1, "side": 1, "horizon": 1, "exit_mode": 1, "strategy": 1}).to_list(100)
         open_syms = [p["symbol"] for p in open_docs]
         if not market_open():
             return "mercado cerrado", "MERCADO", open_syms

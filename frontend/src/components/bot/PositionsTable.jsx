@@ -6,6 +6,7 @@ import { PositionCard } from "./OperationCards";
 import PositionChartDialog from "./PositionChartDialog";
 import PositionRulesDialog from "./PositionRulesDialog";
 import PositionAiReviewButton from "./PositionAiReviewButton";
+import PartialCloseButton from "./PartialCloseButton";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
@@ -116,7 +117,7 @@ export default function PositionsTable({ positions, onClose, onCloseAll, aiRevie
                 <TD right className="text-slate-100">{fmtPrice(p.mark_price)}</TD>
                 <TD right className="text-rose-400">{fmtPrice(p.sl)}{p.exit_mode === "cross" ? <span className="ml-1 text-[9px] text-slate-500" title="SL de seguridad 3×ATR: solo contra un movimiento violento antes del cierre de vela">seg.</span> : p.breakeven && <span className="ml-1 text-[9px] text-amber-400">BE</span>}</TD>
                 <TD right className="text-emerald-400">{p.exit_mode === "cross" ? <span className="text-slate-500">— cruce</span> : fmtPrice(p.tp)}</TD>
-                <TD right>{fmtQty(p.qty)}{p.partial_done && p.partial_gross ? <span data-testid={`position-partial-${p.id}`} className="ml-1 rounded-sm bg-emerald-500/20 px-1 text-[9px] text-emerald-300" title={`Cierre parcial ejecutado · ${fmtSignedUsd(p.partial_gross - (p.partial_fees || 0))} realizados`}>½</span> : null}</TD>
+                <TD right>{fmtQty(p.qty)}{p.partial_gross ? <span data-testid={`position-partial-${p.id}`} className="ml-1 rounded-sm bg-emerald-500/20 px-1 text-[9px] text-emerald-300" title={`Cierre parcial ejecutado · ${fmtSignedUsd(p.partial_gross - (p.partial_fees || 0))} realizados`}>½</span> : null}</TD>
                 <TD right>{fmtUsd(p.margin)}</TD>
                 <TD right className={pnlClass(p.unrealized_pnl)}>
                   <span data-testid={`position-pnl-${p.id}`}>{fmtSignedUsd(p.unrealized_pnl)}</span>
@@ -127,6 +128,7 @@ export default function PositionsTable({ positions, onClose, onCloseAll, aiRevie
                     className={`mr-1.5 inline-flex items-center gap-1 rounded-sm border px-2 py-1 font-mono text-[10px] uppercase transition-colors hover:bg-sky-500/10 ${p.rules || p.ai_review_minutes ? "border-sky-400/60 text-sky-300" : "border-[#1E293B] text-slate-300"}`}>
                     <SlidersHorizontal className="h-3 w-3" /> Gestión{p.rules || p.ai_review_minutes ? " ●" : ""}
                   </button>
+                  <PartialCloseButton p={p} onChanged={onChanged} className="mr-1.5" />
                   <button data-testid={`close-position-${p.id}`} onClick={() => onClose(p.id)}
                     className="inline-flex items-center gap-1 rounded-sm border border-rose-500/40 px-2 py-1 font-mono text-[10px] uppercase text-rose-300 transition-colors hover:bg-rose-500/15">
                     <X className="h-3 w-3" /> Cerrar

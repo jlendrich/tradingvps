@@ -166,6 +166,47 @@ class PositionsMixin:
         await self.tg(f"🎯 <b>PARCIAL {tag}{p.side.upper()} {p.symbol}</b> @ {fmt_price(p.symbol, price)} (+{rules['partial_tp_r']:g}R)\n"
                       f"Cerrado {rules['partial_tp_pct']}% ({part:.2f} lotes) · PnL {net:+.2f} USD · resto {p.qty:.2f} lotes con trailing", "orders")
 
+    async def partial_close(self, pos_id: str, pct: int):
+        """Manual partial close of an open position: `pct` % of its lots at market. Returns (Position | None, reason). Independent of the automatic partial rule."""
+        tickers = self._prices()
+        async with self.lock:
+            p = Position.from_mongo(await self.db.positions.find_one({"_id": ObjectId(pos_id)}))
+            if not p:
+                return None, "Posición no encontrada"
+            price = tickers.get(p.symbol, {}).get("price") or p.mark_price
+            upd = {}
+            if p.live:
+                if not self.broker:
+                    return None, f"modo REAL sin cuenta {self.bk} vinculada"
+                try:
+                    part = risk.partial_lots(p.qty, pct, await self.broker.lot(p.symbol))
+                    if part <= 0:
+                        return None, f"el lote mínimo del bróker no permite cerrar el {pct}% de esta posición"
+                    r = await self.broker.close_partial(p.order_id, part, p.link_id)
+                except Exception as e:
+                    await self.log("ERROR", f"{p.symbol}: cierre parcial manual REAL fallido · {str(e)[:160]}")
+                    return None, f"{self.bk} rechazó el cierre parcial: {str(e)[:120]}"
+                if r.get("position_id"):   # MetaTrader 4 re-tickets the remainder of a partial close
+                    upd["order_id"] = r["position_id"]
+                fee = abs(r.get("commission") or 0)
+            else:
+                part = risk.partial_lots(p.qty, pct)
+                if part <= 0:
+                    return None, f"el lote mínimo (0.01) no permite cerrar el {pct}% de esta posición"
+                fee = risk.spread_cost(p.symbol, part, tickers)
+            gross = risk.pnl(p.symbol, p.side, p.entry_price, price, part, tickers)
+            if not p.live:
+                await self.db.account.update_one({"_id": "main"}, {"$inc": {"balance": gross - fee}})
+                upd["fees"] = round(p.fees + fee, 6)
+            left = round(p.qty - part, 8)
+            upd.update(qty=left, margin=round(p.margin * left / p.qty, 6), partial_gross=round(p.partial_gross + gross, 6), partial_fees=round(p.partial_fees + fee, 6),
+                       initial_qty=p.initial_qty or p.qty, unrealized_pnl=round(risk.pnl(p.symbol, p.side, p.entry_price, price, left, tickers), 4))
+            await self.db.positions.update_one({"_id": ObjectId(pos_id)}, {"$set": upd})
+        tag, f = "REAL " if p.live else "", fmt_price(p.symbol, price)
+        await self.log("ORDER", f"PARCIAL MANUAL {tag}{p.side.upper()} {p.symbol}: cerrado {pct}% ({part:.2f} lotes) @ {f} · PnL {gross - fee:+.2f} USD · resto {left:.2f} lotes sigue abierto")
+        await self.tg(f"🎯 <b>PARCIAL MANUAL {tag}{p.side.upper()} {p.symbol}</b> @ {f}\nCerrado {pct}% ({part:.2f} lotes) · PnL {gross - fee:+.2f} USD · resto {left:.2f} lotes", "orders")
+        return p.model_copy(update=upd), None
+
     async def _adopt_live(self, pid: str, xp: dict, settings: FxSettings, tickers: dict):
         """A broker position carries our clientId but has no DB record (order with unknown result, restored backup…): manage it like any other."""
         async with self.lock:
@@ -327,8 +368,8 @@ class PositionsMixin:
 
     # ---------- execution ----------
     def _slot_block(self, open_docs: list, settings: FxSettings, horizon: str):
-        """Long-horizon positions (fix reversion) have their own cap and do not count towards «Máx. posiciones». Test cruce EMA positions use no slot."""
-        same = [p for p in open_docs if (p.get("horizon") or "short") == horizon and p.get("exit_mode") != "cross"]
+        """Long-horizon positions (fix reversion) have their own cap and do not count towards «Máx. posiciones». Test cruce EMA and manual positions use no slot."""
+        same = [p for p in open_docs if (p.get("horizon") or "short") == horizon and p.get("exit_mode") != "cross" and p.get("strategy") != "manual"]
         cap = settings.max_long_positions if horizon == "long" else settings.max_positions
         if len(same) >= cap:
             return f"máximo de posiciones de {HORIZON_LABEL[horizon]} alcanzado ({cap})"
@@ -352,7 +393,7 @@ class PositionsMixin:
         manual = sig["strategy"] == "manual"   # manual orders: no one-position-per-pair rule and no «Máx. posiciones» cap (each one is its own ticket)
         tickers = self._prices()
         async with self.lock:
-            open_docs = await self.db.positions.find({}, {"symbol": 1, "side": 1, "horizon": 1, "exit_mode": 1}).to_list(100)
+            open_docs = await self.db.positions.find({}, {"symbol": 1, "side": 1, "horizon": 1, "exit_mode": 1, "strategy": 1}).to_list(100)
             slot = None if cross or manual else self._slot_block(open_docs, settings, horizon)
             if (not manual and self._pair_taken(open_docs, symbol, cross)) or slot:
                 await self.log("RISK", f"{symbol}: apertura cancelada · {slot or 'par ya abierto'}")

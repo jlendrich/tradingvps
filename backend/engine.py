@@ -716,6 +716,40 @@ class TradingEngine:
                       f"Posición {qty:.6g} @ {avg:.6g} (media)\nSL {sl:.6g} · TP {tp:.6g} para toda la posición", "orders")
         return pos
 
+    async def partial_close(self, pos_id: str, pct: int):
+        """Manual partial close of an open position: `pct` % of its size at market. Returns (Position | None, reason). Independent of the automatic partial rule."""
+        async with self.lock:
+            p = Position.from_mongo(await self.db.positions.find_one({"_id": ObjectId(pos_id)}))
+            if not p:
+                return None, "Posición no encontrada"
+            part = partial_qty(p.symbol, p.qty, pct)
+            if part <= 0:
+                return None, f"el lote mínimo de Bybit no permite cerrar el {pct}% de esta posición"
+            price = self.market.tickers.get(p.symbol, {}).get("price") or p.mark_price
+            if p.live:
+                if not self.broker:
+                    return None, "modo REAL sin credenciales de Bybit"
+                try:
+                    r = await self.broker.close(p.symbol, p.side, part)
+                except Exception as e:
+                    await self.log("ERROR", f"{p.symbol}: cierre parcial manual REAL fallido · {str(e)[:160]}")
+                    return None, f"Bybit rechazó el cierre parcial: {str(e)[:120]}"
+                exit_price, fee = r["exit"] or price, r["fee"]
+            else:
+                exit_price = price * (1 - SLIPPAGE) if p.side == "long" else price * (1 + SLIPPAGE)
+                fee = exit_price * part * FEE_RATE
+            gross = pnl(p.side, p.entry_price, exit_price, part)
+            if not p.live:
+                await self.db.account.update_one({"_id": "main"}, {"$inc": {"balance": gross - fee}})
+            left = round(p.qty - part, 8)
+            upd = {"qty": left, "margin": round(p.margin * left / p.qty, 6), "fees": round(p.fees + fee, 6), "partial_gross": round(p.partial_gross + gross, 6),
+                   "partial_fees": round(p.partial_fees + fee, 6), "initial_qty": p.initial_qty or p.qty, "unrealized_pnl": round(pnl(p.side, p.entry_price, price, left), 4)}
+            await self.db.positions.update_one({"_id": ObjectId(pos_id)}, {"$set": upd})
+        tag = "REAL " if p.live else ""
+        await self.log("ORDER", f"PARCIAL MANUAL {tag}{p.side.upper()} {p.symbol}: cerrado {pct}% ({part:.6g}) @ {exit_price:.6g} · PnL {gross - fee:+.2f} USDT · resto {left:.6g} sigue abierto")
+        await self.tg(f"🎯 <b>PARCIAL MANUAL {tag}{p.side.upper()} {p.symbol}</b> @ {exit_price:.6g}\nCerrado {pct}% ({part:.6g}) · PnL {gross - fee:+.2f} USDT · resto {left:.6g}", "orders")
+        return p.model_copy(update=upd), None
+
     async def close_position(self, pos_id: str, price: float = None, reason: str = "MANUAL"):
         async with self.lock:
             doc = await self.db.positions.find_one({"_id": ObjectId(pos_id)})
@@ -811,7 +845,7 @@ class TradingEngine:
     async def funnel_state(self, settings: Settings) -> dict:
         acc = await self.account_summary()
         docs = await self._open_and_pending()
-        used = len([p for p in docs if (p.get("horizon") or "short") == "short" and p.get("exit_mode") != "cross"])
+        used = len([p for p in docs if (p.get("horizon") or "short") == "short" and p.get("exit_mode") != "cross" and p.get("strategy") != "manual"])
         block = ("límite de pérdida diaria alcanzado" if acc["daily_paused"] else "Bybit sin respuesta · sin conexión con el exchange" if self.live and self.bybit["down_since"]
                  else f"máximo de posiciones alcanzado ({settings.max_positions})" if used >= settings.max_positions else None)
         return {"acc": acc, "open": {p["symbol"] for p in docs}, "free": settings.max_positions - used, "block": block}
@@ -838,14 +872,14 @@ class TradingEngine:
 
     def _slot_block(self, open_docs: list, settings: Settings, horizon: str):
         """Long-horizon positions have their own cap and do not count towards «Máx. posiciones». `open_docs` includes pending maker entries."""
-        same = [p for p in open_docs if (p.get("horizon") or "short") == horizon and p.get("exit_mode") != "cross"]  # test positions use no slot
+        same = [p for p in open_docs if (p.get("horizon") or "short") == horizon and p.get("exit_mode") != "cross" and p.get("strategy") != "manual"]  # test and manual positions use no slot
         cap = settings.max_long_positions if horizon == "long" else settings.max_positions
         if len(same) >= cap:
             return f"máximo de posiciones de {HORIZON_LABEL[horizon]} alcanzado ({cap})"
         return None
 
     async def _open_and_pending(self, exclude_symbol: str = None) -> list:
-        docs = await self.db.positions.find({}, {"symbol": 1, "horizon": 1, "exit_mode": 1}).to_list(100)
+        docs = await self.db.positions.find({}, {"symbol": 1, "horizon": 1, "exit_mode": 1, "strategy": 1}).to_list(100)
         q = {"symbol": {"$ne": exclude_symbol}} if exclude_symbol else {}
         docs += [{**d, "pending": True} for d in await self.db.pending_entries.find(q, {"symbol": 1, "horizon": 1}).to_list(100)]
         return docs

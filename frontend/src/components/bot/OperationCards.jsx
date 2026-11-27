@@ -1,6 +1,7 @@
 import { X, LineChart, Search, Sparkles, SlidersHorizontal } from "lucide-react";
 import { SideBadge } from "./Panel";
 import PositionAiReviewButton from "./PositionAiReviewButton";
+import PartialCloseButton from "./PartialCloseButton";
 import { fmtPrice, fmtSignedUsd, fmtUsd, fmtQty, fmtDateTime, pnlClass, STRATEGY_LABELS, REASON_LABELS, fmtPips } from "@/lib/api";
 
 const Cell = ({ label, children, cls = "text-slate-200" }) => (
@@ -37,6 +38,7 @@ export function PositionCard({ p, onClose, onChart, onRules, onChanged }) {
         <button data-testid={`position-chart-${p.id}`} onClick={() => onChart(p)} className={`${BTN} border-amber-500/40 text-amber-300 hover:bg-amber-500/10`}><LineChart className="h-3.5 w-3.5" /> Gráfico</button>
         {p.exit_mode !== "cross" && <PositionAiReviewButton p={p} onDone={onChanged} className="flex-1 !py-2" label="IA" />}
         <button data-testid={`position-rules-${p.id}`} onClick={() => onRules(p)} className={`${BTN} ${p.rules || p.ai_review_minutes ? "border-sky-400/60 text-sky-300" : "border-[#1E293B] text-slate-300"}`}><SlidersHorizontal className="h-3.5 w-3.5" /> Gestión</button>
+        <PartialCloseButton p={p} onChanged={onChanged} className="!px-2.5 !py-1.5" />
         <button data-testid={`close-position-${p.id}`} onClick={() => onClose(p.id)} className={`${BTN} border-rose-500/40 text-rose-300 hover:bg-rose-500/15`}><X className="h-3.5 w-3.5" /> Cerrar</button>
       </div>
     </article>

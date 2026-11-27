@@ -172,3 +172,139 @@ async def test_fx_manual_orders_stack_and_skip_the_cap(db, profile):
     docs = await eng.db.positions.find({"symbol": "EURUSD"}).to_list(10)
     assert [(d["strategy"], d["side"]) for d in docs] == [("ai_funnel", "long"), ("manual", "long"), ("manual", "short")]
     assert len({str(d["_id"]) for d in docs}) == 3
+
+
+# ---------------- Iter123: manual positions use no slot · manual partial close ----------------
+class TestManualUsesNoSlot:
+    @pytest.mark.asyncio
+    async def test_bybit_manual_positions_leave_the_slots_to_the_ai(self, bybit, db):
+        s = Settings(max_positions=1)
+        assert await bybit.open_position("BTCUSDT", _sig(), s, None) and await bybit.open_position("BTCUSDT", _sig(), s, None)
+        st = await bybit.funnel_state(s)
+        assert st["free"] == 1 and st["block"] is None and st["open"] == {"BTCUSDT"}
+        assert await bybit.open_position("ETHUSDT", _sig("ai_funnel"), s, None)
+        st = await bybit.funnel_state(s)
+        assert st["free"] == 0 and "máximo de posiciones alcanzado (1)" in st["block"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("profile", [HFM, PEPPERSTONE])
+    async def test_fx_manual_positions_leave_the_slots_to_the_ai(self, db, profile, monkeypatch):
+        from fx import engine_signals
+        monkeypatch.setattr(engine_signals.filters, "rollover_block", lambda *a: None)
+        monkeypatch.setattr(engine_signals.trade_guard, "friday", lambda *a: {"block": False})
+        eng = await _fx(db, profile)
+        s = FxSettings(max_positions=1)
+        for _ in range(2):
+            assert (await eng.open_position("EURUSD", _sig(**BUY), s, None))[0]
+        st = await eng.funnel_state(s)
+        assert st["free"] == 1 and st["block"] is None
+        pos, why = await eng.open_position("GBPUSD", _sig("ai_funnel", price=1.3, sl=1.295, tp=1.31, atr=0.002), s, None)
+        assert pos, why
+        assert "máximo de posiciones alcanzado (1)" in (await eng.funnel_state(s))["block"]
+
+
+BUY = dict(price=1.1, sl=1.095, tp=1.11, atr=0.002)
+
+
+async def _fx(db, profile):
+    eng = FxEngine(db, profile)
+    eng.tg = _noop
+    await eng._new_account(10_000.0)
+    eng.market.tickers = {"EURUSD": {"price": 1.1, "bid": 1.1, "ask": 1.1001, "spread": 0.0001}, "GBPUSD": {"price": 1.3, "bid": 1.3, "ask": 1.3001, "spread": 0.0001}}
+    return eng
+
+
+class TestPartialClose:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("pct", [25, 50, 75])
+    async def test_bybit_paper(self, bybit, db, pct):
+        pos = await bybit.open_position("BTCUSDT", _sig("ai_funnel"), Settings(), None)
+        bal = (await db.account.find_one({"_id": "main"}))["balance"]
+        bybit.market.tickers["BTCUSDT"]["price"] = 103.0
+        out, why = await bybit.partial_close(pos.id, pct)
+        assert out, why
+        d = await db.positions.find_one({})
+        part = pos.qty - d["qty"]
+        assert part == pytest.approx(pos.qty * pct / 100, rel=0.02) and d["initial_qty"] == pos.qty and d["margin"] == pytest.approx(pos.margin * d["qty"] / pos.qty, rel=1e-4)
+        assert d["partial_gross"] > 0 and d["partial_fees"] > 0 and d["partial_done"] is False and (d["sl"], d["tp"]) == (pos.sl, pos.tp)
+        assert (await db.account.find_one({"_id": "main"}))["balance"] == pytest.approx(bal + d["partial_gross"] - d["partial_fees"])
+        assert await db.logs.count_documents({"message": {"$regex": f"PARCIAL MANUAL LONG BTCUSDT: cerrado {pct}%"}}) == 1
+        trade = await bybit.close_position(pos.id)
+        assert trade.pnl == pytest.approx(d["partial_gross"] + crypto.pnl("long", pos.entry_price, trade.exit_price, d["qty"]) - trade.fees, abs=0.02)
+
+    @pytest.mark.asyncio
+    async def test_bybit_can_be_repeated_and_handles_errors(self, bybit, db):
+        pos = await bybit.open_position("BTCUSDT", _sig("ai_funnel"), Settings(), None)
+        for _ in range(2):
+            assert (await bybit.partial_close(pos.id, 50))[0]
+        assert (await db.positions.find_one({}))["qty"] == pytest.approx(pos.qty / 4, rel=0.02)
+        assert (await bybit.partial_close("0" * 24, 50)) == (None, "Posición no encontrada")
+        await db.positions.update_one({}, {"$set": {"qty": 0.001}})
+        out, why = await bybit.partial_close(pos.id, 50)
+        assert out is None and "lote mínimo" in why and (await db.positions.find_one({}))["qty"] == 0.001
+
+    @pytest.mark.asyncio
+    async def test_bybit_real_sends_a_reduce_order(self, bybit, db):
+        broker = _live(bybit)
+        closes = []
+
+        async def close(symbol, side, qty):
+            closes.append((symbol, side, qty))
+            return {"exit": 104.0, "fee": 0.2}
+        broker.close = close
+        pos = await bybit.open_position("BTCUSDT", _sig("ai_funnel"), Settings(), None)
+        out, why = await bybit.partial_close(pos.id, 25)
+        assert out and closes == [("BTCUSDT", "long", 0.5)] and out.qty == 1.5
+        d = await db.positions.find_one({})
+        assert d["qty"] == 1.5 and d["partial_gross"] == pytest.approx(2.0) and d["partial_fees"] == pytest.approx(0.2)
+
+        async def boom(*a):
+            raise RuntimeError("timeout")
+        broker.close = boom
+        out, why = await bybit.partial_close(pos.id, 50)
+        assert out is None and "Bybit rechazó" in why and (await db.positions.find_one({}))["qty"] == 1.5
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("profile", [HFM, PEPPERSTONE])
+    async def test_fx_paper(self, db, profile):
+        eng = await _fx(db, profile)
+        pos, why = await eng.open_position("EURUSD", _sig(**BUY), FxSettings(), None)
+        assert pos, why
+        bal = (await eng.db.account.find_one({"_id": "main"}))["balance"]
+        eng.market.tickers["EURUSD"].update(price=1.105, bid=1.105, ask=1.1051)
+        out, why = await eng.partial_close(pos.id, 50)
+        assert out, why
+        d = await eng.db.positions.find_one({})
+        assert d["qty"] == pytest.approx(pos.qty / 2, abs=0.011) and d["partial_gross"] > 0 and d["initial_qty"] == pos.qty and d["partial_done"] is False
+        assert (await eng.db.account.find_one({"_id": "main"}))["balance"] == pytest.approx(bal + d["partial_gross"] - d["partial_fees"])
+        assert await eng.db.logs.count_documents({"message": {"$regex": "PARCIAL MANUAL LONG EURUSD: cerrado 50%"}}) == 1
+
+    @pytest.mark.asyncio
+    async def test_fx_real_uses_the_ticket_and_keeps_the_new_one(self, db):
+        eng = await _fx(db, HFM)
+        pos, _ = await eng.open_position("EURUSD", _sig(**BUY), FxSettings(), None)
+        await eng.db.positions.update_one({}, {"$set": {"live": True, "order_id": "T1", "link_id": "L1", "qty": 0.4}})
+        calls = []
+
+        class B:
+            async def lot(self, symbol):
+                return {"min": 0.01, "step": 0.01}
+
+            async def close_partial(self, pid, lots, link):
+                calls.append((pid, lots, link))
+                return {"order_id": "x", "commission": 0.3, "position_id": "T2"}
+        eng.broker = B()
+        out, why = await eng.partial_close(pos.id, 25)
+        d = await eng.db.positions.find_one({})
+        assert out and calls == [("T1", 0.1, "L1")] and d["qty"] == pytest.approx(0.3) and d["order_id"] == "T2" and d["partial_fees"] == pytest.approx(0.3)
+
+    def test_route_and_model(self):
+        import inspect
+        from pydantic import ValidationError
+        from models import PartialClose
+        from routers import shared_routes
+        assert PartialClose(pct=50).pct == 50
+        for bad in (0, 4, 96, 100):
+            with pytest.raises(ValidationError):
+                PartialClose(pct=bad)
+        assert '@router.post("/positions/{pos_id}/partial-close")' in inspect.getsource(shared_routes)

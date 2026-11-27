@@ -18,7 +18,7 @@ import ai_rules
 import trade_learning
 import trade_guard
 from fx.market import market_open as fx_market_open
-from models import ManualOrder, TradeRules, LevelsUpdate, Position
+from models import ManualOrder, TradeRules, LevelsUpdate, PartialClose, Position
 import performance
 from auth import hash_password, verify_password, create_token
 from ai_advisor import ping as ai_ping, current as ai_current, friendly_error, key_hint, ORIGIN_LABELS
@@ -144,6 +144,15 @@ def add_shared_routes(router, engine, label: str, currency: str = "USDT", before
         await engine.db.positions.update_one({"_id": ObjectId(p.id)}, {"$set": {"sl": sl, "tp": tp, "breakeven": be}})
         await engine.log("ORDER", f"{p.symbol}: niveles movidos a mano{' (REAL)' if p.live else ''} · SL {p.sl:.6g} → {sl:.6g} · TP {p.tp:.6g} → {tp:.6g}")
         return {**p.model_dump(), "sl": sl, "tp": tp, "breakeven": be}
+
+    @router.post("/positions/{pos_id}/partial-close")
+    async def position_partial_close(pos_id: str, body: PartialClose):
+        """Closes `pct` % of an open position at market; the rest stays open with its SL/TP and management."""
+        await _position(pos_id)
+        pos, reason = await engine.partial_close(pos_id, body.pct)
+        if not pos:
+            raise HTTPException(400, f"No se cerró: {reason}")
+        return pos.model_dump()
 
     @router.put("/positions/{pos_id}/rules")
     async def position_rules(pos_id: str, body: TradeRules):
